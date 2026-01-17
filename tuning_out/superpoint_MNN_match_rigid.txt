@@ -1,0 +1,399 @@
+============================================================
+Testing rotation angle: -90 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 463
+  Inliers: 17
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -85 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 413
+  Inliers: 12
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -80 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 417
+  Inliers: 11
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -75 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 427
+  Inliers: 19
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -70 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 412
+  Inliers: 19
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -65 degrees
+INFO - Matching succeeded!
+INFO -   - Matches after ratio test: 426
+INFO -   - Inliers after RANSAC: 23
+INFO -   - Inlier ratio: 5.4%
+INFO - Transform: scale=1.814, rotation=8.4deg
+INFO - Estimated location:
+INFO -   Pixel: (3100.5, 3669.7)
+INFO -   Lat/Lon: (13.026188, 77.563858)
+MATCHING SUCCESSFUL
+  Location: 13.026188, 77.563858
+  Inliers: 23 (5.4%)
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -60 degrees
+INFO - Matching succeeded!
+INFO -   - Matches after ratio test: 450
+INFO -   - Inliers after RANSAC: 34
+INFO -   - Inlier ratio: 7.6%
+INFO - Transform: scale=1.579, rotation=0.7deg
+INFO - Estimated location:
+INFO -   Pixel: (3017.1, 3704.5)
+INFO -   Lat/Lon: (13.026143, 77.563746)
+MATCHING SUCCESSFUL
+  Location: 13.026143, 77.563746
+  Inliers: 34 (7.6%)
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -55 degrees
+INFO - Matching succeeded!
+INFO -   - Matches after ratio test: 410
+INFO -   - Inliers after RANSAC: 36
+INFO -   - Inlier ratio: 8.8%
+INFO - Transform: scale=1.575, rotation=-3.8deg
+INFO - Estimated location:
+INFO -   Pixel: (3020.7, 3732.8)
+INFO -   Lat/Lon: (13.026106, 77.563751)
+MATCHING SUCCESSFUL
+  Location: 13.026106, 77.563751
+  Inliers: 36 (8.8%)
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -50 degrees
+INFO - Matching succeeded!
+INFO -   - Matches after ratio test: 410
+INFO -   - Inliers after RANSAC: 43
+INFO -   - Inlier ratio: 10.5%
+INFO - Transform: scale=1.532, rotation=-7.9deg
+INFO - Estimated location:
+INFO -   Pixel: (3014.2, 3729.1)
+INFO -   Lat/Lon: (13.026111, 77.563742)
+MATCHING SUCCESSFUL
+  Location: 13.026111, 77.563742
+  Inliers: 43 (10.5%)
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -45 degrees
+INFO - Matching succeeded!
+INFO -   - Matches after ratio test: 390
+INFO -   - Inliers after RANSAC: 32
+INFO -   - Inlier ratio: 8.2%
+INFO - Transform: scale=1.506, rotation=-13.2deg
+INFO - Estimated location:
+INFO -   Pixel: (3006.2, 3730.0)
+INFO -   Lat/Lon: (13.026110, 77.563732)
+MATCHING SUCCESSFUL
+  Location: 13.026110, 77.563732
+  Inliers: 32 (8.2%)
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -40 degrees
+INFO - Matching succeeded!
+INFO -   - Matches after ratio test: 409
+INFO -   - Inliers after RANSAC: 24
+INFO -   - Inlier ratio: 5.9%
+INFO - Transform: scale=1.407, rotation=-18.7deg
+INFO - Estimated location:
+INFO -   Pixel: (2980.6, 3712.6)
+INFO -   Lat/Lon: (13.026132, 77.563697)
+MATCHING SUCCESSFUL
+  Location: 13.026132, 77.563697
+  Inliers: 24 (5.9%)
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -35 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 408
+  Inliers: 14
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -30 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 423
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -25 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 418
+  Inliers: 8
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -20 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 437
+  Inliers: 8
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -15 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 442
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -10 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 429
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: -5 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 443
+  Inliers: 9
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 0 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 438
+  Inliers: 8
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 5 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 413
+  Inliers: 8
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 10 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 453
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 15 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 445
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 20 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 416
+  Inliers: 8
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 25 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 410
+  Inliers: 9
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 30 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 427
+  Inliers: 10
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 35 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 424
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 40 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 421
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 45 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 449
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 50 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 444
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 55 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 425
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 60 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 426
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 65 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 434
+  Inliers: 9
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 70 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 429
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 75 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 445
+  Inliers: 7
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 80 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 429
+  Inliers: 8
+============================================================
+
+
+
+============================================================
+Testing rotation angle: 85 degrees
+WARNING - Matching failed - not enough inliers
+MATCHING FAILED
+  Matches: 413
+  Inliers: 7
+============================================================
