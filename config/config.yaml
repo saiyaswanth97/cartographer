@@ -1,0 +1,43 @@
+# Cartographer Configuration
+# Drone-to-Map Matching Pipeline
+
+# Data paths
+paths:
+  map_tif: "data/map.tif"
+  drone_images_dir: "data/train_data/drone_images/"
+  camera_calibration: "data/train_data/camera_infomation.yaml"
+  ground_truth: "data/train_data/ground_truth.csv"
+  output_dir: "output/"
+
+# Drone image preprocessing
+preprocessing:
+  scale: 1.0 # Scale factor for drone image
+  rotation: -60 # Rotation in degrees (drone heading offset from north)
+  undistort: false # Whether to apply camera undistortion
+
+# Map extraction
+map_extraction:
+  default_patch_size: 3000 # Default patch size in pixels
+  allow_clip: true # Allow patches to be clipped at boundaries
+
+# Feature matching
+matching:
+  model: "similarity" # Transform model: "similarity", "affine", "homography"
+  ratio_thresh: 0.95 # Lowe's ratio test threshold (higher = more permissive)
+  ransac_thresh: 0.05 # RANSAC reprojection threshold in normalized pixels
+  confidence: 0.99 # RANSAC confidence level
+  min_inliers: 20 # Minimum inliers for valid match
+
+# Visualization
+visualization:
+  enabled: true # Toggle visualization on/off
+  save_results: true # Save visualization to file
+  output_file: "matching_results.png"
+  max_keypoints_draw: 100 # Max keypoints to draw
+  max_matches_draw: 50 # Max matches to draw
+
+# Logging
+logging:
+  level: "INFO" # DEBUG, INFO, WARNING, ERROR
+  format: "%(levelname)s - %(message)s"
+  # format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
