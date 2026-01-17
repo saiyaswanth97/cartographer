@@ -166,7 +166,7 @@ class MapQuery:
         patch = self.ds.read(window=window)
         return patch, window
 
-    def patch_to_opencv(self, patch: np.ndarray, hist_eq: bool = True) -> np.ndarray:
+    def patch_to_opencv(self, patch: np.ndarray, hist_eq: bool = False) -> np.ndarray:
         """
         Convert rasterio patch (bands, h, w) to OpenCV BGR format (h, w, channels).
 

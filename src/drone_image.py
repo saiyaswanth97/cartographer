@@ -78,7 +78,7 @@ class DroneImage:
         scale: float = 1.0,
         rotation: float = 0.0,
         expand_canvas: bool = True,
-        hist_eq: bool = True
+        hist_eq: bool = False
     ) -> np.ndarray:
         """
         Preprocess drone image with scaling and rotation.

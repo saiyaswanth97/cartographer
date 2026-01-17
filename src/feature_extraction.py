@@ -209,10 +209,6 @@ class SuperPointDescriptor(SparseFeatureDescriptor):
         score = out[1][0]
         kp = out[0][0]
         desc = out[2][0]
-        print(out)
-        print(kp.shape)
-        print(score.shape)
-        print(desc.shape)
         
         kps = [
             cv2.KeyPoint(float(p[0]), float(p[1]), int(s*50))
