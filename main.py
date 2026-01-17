@@ -1,196 +1,268 @@
-import rasterio
-import rasterio.warp
-import cv2
+#!/usr/bin/env python3
+"""
+Cartographer - Drone to Map Matching Pipeline
+
+Main entry point for the drone image localization system.
+Uses SIFT feature matching to locate drone images on satellite maps.
+"""
+
+import argparse
+import logging
 import numpy as np
-import matplotlib.pyplot as plt
+from pathlib import Path
+
+from src.config import load_config
+from src.map_query import MapQuery
+from src.drone_image import DroneImage
+from src.feature_extraction import SIFTDescriptor, SURFDescriptor, ORBDescriptor, SuperPointDescriptor
+from src.matching import SIFTMatcher2D
+from src.visualization import visualize_matching_results, visualize_side_by_side
 
 
-class MapQuery():
-    def __init__(self, tiff_path):
-        self.ds = rasterio.open(tiff_path)
-        
-        # Precompute lat/lon bounds (safety)
-        left, bottom, right, top = self.ds.bounds
-        lons, lats = rasterio.warp.transform(
-            self.ds.crs, "EPSG:4326",
-            [left, right],
-            [bottom, top]
-        )
-        self.lat_lon_bounds = {
-            "min_lat": min(lats),
-            "max_lat": max(lats),
-            "min_lon": min(lons),
-            "max_lon": max(lons),
-        }
-        
-    def convert_xy_to_latlon(self, x, y):
-        lon, lat = rasterio.warp.transform(self.ds.crs, "EPSG:4326", [x], [y])
-        return lat[0], lon[0]
-    
-    def convert_latlon_to_xy(self, lat, lon):
-        if not (self.lat_lon_bounds['min_lat'] <= lat <= self.lat_lon_bounds['max_lat'] and
-                self.lat_lon_bounds['min_lon'] <= lon <= self.lat_lon_bounds['max_lon']):
-            raise ValueError("Latitude or Longitude is out of bounds of the dataset.")
-        x, y = rasterio.warp.transform("EPSG:4326", self.ds.crs, [lon], [lat])
-        return x[0], y[0]
-                
-    def check_within_patch_bounds(self, x, y):
-        return (0 <= x < self.ds.width) and (0 <= y < self.ds.height)
-    
-    def extract_patch(self, x, y, patch_size):
-        if not self.check_within_patch_bounds(x, y):
-            raise ValueError("Coordinates are out of bounds of the dataset.")
-        
-        window = rasterio.windows.Window(
-            x - patch_size // 2,
-            y - patch_size // 2,
-            patch_size,
-            patch_size
-        ).intersection(rasterio.windows.Window(0, 0, self.ds.width, self.ds.height))
-        
-        patch = self.ds.read(window=window)
-        return patch, window
-        
-    @staticmethod
-    def show_patch(patch, title):
-        if patch.shape[0] >= 3:
-            img = patch[:3].transpose(1, 2, 0)
-        else:
-            img = patch[0]
-
-        img = img.astype(np.float32)
-        img = (img - img.min()) / (img.max() - img.min() + 1e-6)
-
-        plt.imshow(img)
-        plt.title(title)
-        plt.axis("off")
-        plt.show()
-
-
-def preprocess_drone_image(img, scale, yaw_deg):
-    h, w = img.shape[:2]
-
-    # Scale
-    img = cv2.resize(img, None, fx=scale, fy=scale)
-
-    # Rotate
-    M = cv2.getRotationMatrix2D(
-        (img.shape[1] // 2, img.shape[0] // 2),
-        yaw_deg,
-        1.0
+def setup_logging(config):
+    """Configure logging based on config."""
+    logging.basicConfig(
+        level=getattr(logging, config.logging.level),
+        format=config.logging.format
     )
-    img = cv2.warpAffine(img, M, (img.shape[1], img.shape[0]))
+    return logging.getLogger(__name__)
 
-    return img
+
+def run_matching_pipeline(config, drone_image_file: str = None, map_location: tuple = None):
+    """
+    Run the complete matching pipeline.
+
+    Args:
+        config: Configuration object.
+        drone_image_file: Override drone image filename.
+        map_location: Override map extraction location (x, y).
+
+    Returns:
+        Dictionary with matching results.
+    """
+    logger = setup_logging(config)
+
+    # Load drone image
+    logger.info("Loading drone image...")
+    drone_handler = DroneImage(
+        img_data_path=config.paths.drone_images_dir,
+        calibration_file_path=config.paths.camera_calibration
+    )
+
+    drone_img_raw = drone_handler.get_image(
+        # img_filename=drone_image_file or '1485.025665088.png',
+        img_filename=drone_image_file or '1537.017421696.png',
+        undistort=config.preprocessing.undistort
+    )
+    logger.info(f"Loaded drone image: {drone_img_raw.shape}")
+
+    # Preprocess drone image
+    drone_img = DroneImage.preprocess(
+        drone_img_raw,
+        scale=config.preprocessing.scale,
+        rotation=config.preprocessing.rotation
+    )
+    logger.info(f"Preprocessed drone image: {drone_img.shape} "
+                f"(scale={config.preprocessing.scale}, rot={config.preprocessing.rotation})")
+
+    # Load map and extract patch
+    logger.info("Loading map...")
+    map_query = MapQuery(config.paths.map_tif)
+
+    # Use provided location or default from ground truth
+    if map_location:
+        px, py = map_location
+    else:
+        # Default: ground truth location for 1485.025665088.png
+        px, py = 2811, 3651
+
+    map_patch, window = map_query.extract_patch(
+        px, py,
+        config.map_extraction.default_patch_size,
+        allow_clip=config.map_extraction.allow_clip
+    )
+    map_img = map_query.patch_to_opencv(map_patch)
+    logger.info(f"Extracted map patch at ({px}, {py}): {map_img.shape}")
+
+    # Visualize inputs
+    # if config.visualization.enabled:
+    if False:
+        visualize_side_by_side(
+            drone_img, map_img,
+            title="Input Images",
+            labels=("Drone (preprocessed)", "Map Patch")
+        )
+
+    # Compute features
+    # sift = SIFTDescriptor()
+    # sift = SURFDescriptor()
+    # sift = ORBDescriptor()
+    sift = SuperPointDescriptor()
+
+    kp1, desc1 = sift.compute(drone_img)
+    kp2, desc2 = sift.compute(map_img)
+    logger.info(f"Keypoints: drone={len(kp1)}, map={len(kp2)}")
+
+    # Match features
+    logger.info("Matching features...")
+    matcher = SIFTMatcher2D(
+        model=config.matching.model,
+        ratio_thresh=config.matching.ratio_thresh,
+        ransac_thresh=config.matching.ransac_thresh,
+        confidence=config.matching.confidence,
+        min_inliers=config.matching.min_inliers
+    )
+
+    result = matcher.match_and_estimate(kp1, desc1, kp2, desc2)
+
+    # Process results
+    if result.success:
+        logger.info(f"Matching succeeded!")
+        logger.info(f"  - Matches after ratio test: {result.num_matches}")
+        logger.info(f"  - Inliers after RANSAC: {result.num_inliers}")
+        logger.info(f"  - Inlier ratio: {result.inlier_ratio:.1%}")
+
+        # Decompose transform
+        params = matcher.decompose_similarity(result.transform)
+        if params['scale']:
+            logger.info(f"Transform: scale={params['scale']:.3f}, "
+                       f"rotation={params['rotation']:.1f}deg")
+
+        # Estimate location
+        h, w = drone_img.shape[:2]
+        center = np.array([[w/2, h/2]], dtype=np.float32)
+
+        if result.transform.shape[0] == 2:
+            center_homog = np.hstack([center, np.ones((1, 1))])
+            map_center = (result.transform @ center_homog.T).T[0]
+        else:
+            center_homog = np.hstack([center, np.ones((1, 1))])
+            map_center_homog = (result.transform @ center_homog.T).T[0]
+            map_center = map_center_homog[:2] / map_center_homog[2]
+
+        # Convert to global coordinates
+        global_x = window.col_off + map_center[0]
+        global_y = window.row_off + map_center[1]
+
+        # Convert to lat/lon
+        lat, lon = map_query.convert_pixel_to_latlon(global_x, global_y)
+
+        logger.info(f"Estimated location:")
+        logger.info(f"  Pixel: ({global_x:.1f}, {global_y:.1f})")
+        logger.info(f"  Lat/Lon: ({lat:.6f}, {lon:.6f})")
+
+        output = {
+            'success': True,
+            'pixel_location': (global_x, global_y),
+            'lat_lon': (lat, lon),
+            'num_inliers': result.num_inliers,
+            'inlier_ratio': result.inlier_ratio,
+            'transform': result.transform,
+            'transform_params': params
+        }
+    else:
+        logger.warning("Matching failed - not enough inliers")
+        output = {
+            'success': False,
+            'num_matches': result.num_matches,
+            'num_inliers': result.num_inliers
+        }
+
+    # Visualization
+    if config.visualization.enabled or config.visualization.save_results:
+        save_path = config.visualization.output_file if config.visualization.save_results else None
+        visualize_matching_results(
+            drone_img, map_img,
+            kp1, kp2,
+            result.inliers, result.all_matches,
+            result.transform,
+            save_path=save_path,
+            show=config.visualization.enabled,
+            max_keypoints=config.visualization.max_keypoints_draw,
+            max_matches=config.visualization.max_matches_draw
+        )
+        if save_path:
+            logger.info(f"Saved visualization to {save_path}")
+
+    return output
+
+
+def main():
+    """Main entry point with CLI argument parsing."""
+    parser = argparse.ArgumentParser(
+        description="Drone to Map Matching Pipeline",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        '-c', '--config',
+        default='config/config.yaml',
+        help='Path to configuration file'
+    )
+    parser.add_argument(
+        '-i', '--image',
+        default=None,
+        help='Drone image filename to process'
+    )
+    parser.add_argument(
+        '-x', '--map-x',
+        type=int,
+        default=None,
+        help='Map X coordinate for patch extraction'
+    )
+    parser.add_argument(
+        '-y', '--map-y',
+        type=int,
+        default=None,
+        help='Map Y coordinate for patch extraction'
+    )
+    parser.add_argument(
+        '-v', '--visualize',
+        action='store_true',
+        help='Enable visualization'
+    )
+    parser.add_argument(
+        '--no-save',
+        action='store_true',
+        help='Disable saving visualization'
+    )
+
+    args = parser.parse_args()
+
+    # Load configuration
+    config = load_config(args.config)
+
+    # Override from command line
+    if args.visualize:
+        config.visualization.enabled = True
+    if args.no_save:
+        config.visualization.save_results = False
+
+    # Determine map location
+    map_location = None
+    if args.map_x is not None and args.map_y is not None:
+        map_location = (args.map_x, args.map_y)
+
+    result = run_matching_pipeline(
+        config,
+        drone_image_file=args.image,
+        map_location=map_location
+    )
+
+    # Print summary
+    print("="*60)
+    if result['success']:
+        print("MATCHING SUCCESSFUL")
+        print(f"  Location: {result['lat_lon'][0]:.6f}, {result['lat_lon'][1]:.6f}")
+        print(f"  Inliers: {result['num_inliers']} ({result['inlier_ratio']:.1%})")
+    else:
+        print("MATCHING FAILED")
+        print(f"  Matches: {result.get('num_matches', 0)}")
+        print(f"  Inliers: {result.get('num_inliers', 0)}")
+    print("="*60)
+    print("\n")
+
+    return 0 if result['success'] else 1
 
 
 if __name__ == '__main__':
-    # Example usage
-    img_path = 'data/train_data/drone_images/1485.025665088.png'
-    drone_img = cv2.imread(img_path)
-    drone_gray = cv2.cvtColor(drone_img, cv2.COLOR_BGR2GRAY)
-
-    # scale = 0.5  # Example scale factor
-    # yaw_deg = 30  # Example yaw angle in degrees
-
-    # processed_img = preprocess_drone_image(img, scale, yaw_deg)
-
-    # plt.imshow(cv2.cvtColor(processed_img, cv2.COLOR_BGR2RGB))
-    # plt.title("Processed Drone Image")
-    # plt.axis("off")
-    # plt.show()
-    
-    # map_query = MapQuery('data/map.tif')
-    # map_image,_ = map_query.extract_patch(2600, 3600, 1600)
-    # plt.imshow(map_image.transpose(1, 2, 0))
-    # plt.title("Extracted Map Patch")
-    # plt.axis("off")
-    # plt.show()
-    
-    # img_g = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
-    # map_query_g = cv2.cvtColor(map_image.transpose(1, 2, 0), cv2.COLOR_BGR2GRAY)
-    # res = cv2.matchTemplate(map_query_g, img_g, cv2.TM_CCOEFF_NORMED)
-    # _, max_val, _, max_loc = cv2.minMaxLoc(res)
-    
-    # print(f"Max correlation value: {max_val} at location: {max_loc}")
-    
-    # transformed_x = max_loc[0] + processed_img.shape[1] // 2
-    # transformed_y = max_loc[1] + processed_img.shape[0] // 2
-    
-    # img_warped = preprocess_drone_image(img, scale, yaw_deg)
-    # map_patch, _ = map_query.extract_patch(transformed_x, transformed_y, processed_img.shape[1])
-    # plt.imshow(map_patch.transpose(1, 2, 0))
-    # plt.title("Matched Map Patch")
-    # plt.axis("off")
-    # plt.show()
-    
-    map_query = MapQuery('data/map.tif')
-    seed_col, seed_row = 2600, 3600
-    search_size = 2000
-
-    map_patch, window = map_query.extract_patch(
-        seed_col, seed_row, search_size
-    )
-
-    map_rgb = map_patch[:3].transpose(1, 2, 0)
-    map_gray = cv2.cvtColor(map_rgb, cv2.COLOR_BGR2GRAY)
-
-    MapQuery.show_patch(map_patch, "Search Map Patch")
-
-    # -----------------------------
-    # Template matching (scale + yaw sweep)
-    # -----------------------------
-    best_score = -1
-    best_result = None
-
-    for scale in [0.5, 0.75, 1.0]:
-        for yaw in range(-30, 31, 10):
-
-            proc = preprocess_drone_image(drone_img, scale, yaw)
-            proc_gray = cv2.cvtColor(proc, cv2.COLOR_BGR2GRAY)
-
-            if (proc_gray.shape[0] > map_gray.shape[0] or
-                proc_gray.shape[1] > map_gray.shape[1]):
-                continue
-
-            res = cv2.matchTemplate(
-                map_gray,
-                proc_gray,
-                cv2.TM_CCOEFF_NORMED
-            )
-
-            _, score, _, loc = cv2.minMaxLoc(res)
-
-            if score > best_score:
-                best_score = score
-                best_result = (loc, scale, yaw, proc_gray.shape)
-
-    if best_result is None:
-        raise RuntimeError("No valid match found")
-
-    (best_loc, best_scale, best_yaw, (h, w)) = best_result
-
-    print(f"Best NCC score: {best_score:.3f}")
-    print(f"Best scale: {best_scale}, yaw: {best_yaw}")
-
-    # -----------------------------
-    # Convert match → global pixel
-    # -----------------------------
-    match_col = window.col_off + best_loc[0] + w // 2
-    match_row = window.row_off + best_loc[1] + h // 2
-
-    # -----------------------------
-    # Extract final matched patch
-    # -----------------------------
-    final_patch, _ = map_query.extract_patch(
-        match_col, match_row, w
-    )
-
-    MapQuery.show_patch(final_patch, "Matched Map Patch")
-
-    # -----------------------------
-    # Convert to lat/lon
-    # -----------------------------
-    lat, lon = map_query.convert_xy_to_latlon(match_col, match_row)
-    print(f"Matched location → lat: {lat:.6f}, lon: {lon:.6f}")
-    
+    exit(main())
