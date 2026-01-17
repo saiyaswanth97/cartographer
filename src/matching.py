@@ -33,11 +33,12 @@ class SIFTMatcher2D:
 
     def __init__(
         self,
-        ratio_thresh: float = 0.75,
-        ransac_thresh: float = 2.5,
+        ratio_thresh: float = 0.9,
+        ransac_thresh: float = 0.025,
         confidence: float = 0.99,
-        min_inliers: int = 10,
-        model: str = "similarity"
+        min_inliers: int = 20,
+        model: str = "similarity",
+        matcher: str = "MNN"
     ):
         """
         Initialize SIFT matcher.
@@ -48,6 +49,7 @@ class SIFTMatcher2D:
             confidence: RANSAC confidence level.
             min_inliers: Minimum inliers for valid match.
             model: Transform model - "similarity", "affine", or "homography".
+            matcher: Matcher type - "flann", "bf", "bf_hamming", "MNN".
         """
         self.ratio_thresh = ratio_thresh
         self.ransac_thresh = ransac_thresh
@@ -56,10 +58,25 @@ class SIFTMatcher2D:
         self.model = model
 
         # FLANN parameters for SIFT/SURF/Superpoint (L2 distance)
-        self.matcher = cv2.FlannBasedMatcher(
-            dict(algorithm=1, trees=5),  # KDTree
-            dict(checks=50)
-        )
+        if matcher == "flann":
+            self.matcher = cv2.FlannBasedMatcher(
+                dict(algorithm=1, trees=5),  # KDTree
+                dict(checks=50)
+            )
+        elif matcher == "bf":
+            self.matcher = cv2.BFMatcher(
+                cv2.NORM_L2,
+                crossCheck=False
+            )
+        elif matcher == "bf_hamming":
+            self.matcher = cv2.BFMatcher(
+                cv2.NORM_HAMMING,
+                crossCheck=False
+            )
+        elif matcher == "MNN":
+            self.matcher = None
+        else:
+            raise ValueError(f"Unknown matcher type: {matcher}")
 
     def match_descriptors(
         self,
@@ -79,6 +96,9 @@ class SIFTMatcher2D:
         if len(desc1) < 2 or len(desc2) < 2:
             return []
 
+        if self.matcher is None:
+            return self.mutual_nn_matches(desc1, desc2)
+        
         knn = self.matcher.knnMatch(desc1, desc2, k=2)
         good = []
         for match in knn:
@@ -87,18 +107,35 @@ class SIFTMatcher2D:
             m, n = match
             if m.distance < self.ratio_thresh * n.distance:
                 good.append(m)
-        
-        # matcher = cv2.BFMatcher(
-        #     cv2.NORM_HAMMING,
-        #     crossCheck=False
-        # )
-        # matches = matcher.knnMatch(desc1, desc2, k=2)
-        # good = []
-        # for m, n in matches:
-        #     if m.distance < 0.8 * n.distance:
-        #         good.append(m)
 
         return good
+    
+    @staticmethod
+    def mutual_nn_matches(desc1: np.ndarray, desc2: np.ndarray) -> list:
+        """
+        Mutual Nearest Neighbor matching for float descriptors.
+
+        Args:
+            desc1: (N1, D) descriptors
+            desc2: (N2, D) descriptors
+
+        Returns:
+            List of cv2.DMatch
+        """
+        bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+
+        matches_12 = bf.match(desc1, desc2)
+        matches_21 = bf.match(desc2, desc1)
+
+        # Build reverse lookup
+        reverse = {m.trainIdx: m.queryIdx for m in matches_21}
+
+        mutual = []
+        for m in matches_12:
+            if reverse.get(m.queryIdx, -1) == m.trainIdx:
+                mutual.append(m)
+
+        return mutual
 
     def estimate_transform(
         self,
@@ -133,14 +170,14 @@ class SIFTMatcher2D:
 
         if self.model == "homography":
             M, mask = cv2.findHomography(
-                pts1, pts2,
+                pts1_norm, pts2_norm,
                 cv2.RANSAC,
                 self.ransac_thresh,
                 confidence=self.confidence
             )
         elif self.model == "affine":
             M, mask = cv2.estimateAffine2D(
-                pts1, pts2,
+                pts1_norm, pts2_norm,
                 method=cv2.RANSAC,
                 ransacReprojThreshold=self.ransac_thresh,
                 confidence=self.confidence
@@ -148,26 +185,23 @@ class SIFTMatcher2D:
         elif self.model == "similarity":
             M, mask = cv2.estimateAffinePartial2D(
                 pts1_norm, pts2_norm,
-                # pts1, pts2,
                 method=cv2.RANSAC,
-                # ransacReprojThreshold=self.ransac_thresh,
-                ransacReprojThreshold=0.025,
+                ransacReprojThreshold=self.ransac_thresh,
                 confidence=self.confidence
             )
-            T1 = np.array([[w1, 0, 0],
-                           [0, h1, 0],
-                           [0, 0, 1]])
-            T2 = np.array([[w2, 0, 0],
-                           [0, h2, 0],
-                           [0, 0, 1]])
-            
-            M_norm = np.vstack([M, [0, 0, 1]])
-            M_pixel = T2 @ M_norm @ np.linalg.inv(T1)
-            M_pixel = M_pixel[:2, :]
-            M = M_pixel
-            
         else:
             raise ValueError(f"Unknown model type: {self.model}")
+        
+        T1 = np.array([[1/w1, 0, 0],
+                        [0, 1/h1, 0],
+                        [0, 0, 1]])
+        T2 = np.array([[w2, 0, 0],
+                        [0, h2, 0],
+                        [0, 0, 1]])
+        
+        M_norm = np.vstack([M, [0, 0, 1]])
+        M_pixel = T2 @ M_norm @ T1
+        M = M_pixel[:2, :]
 
         return M, mask, pts1
 
