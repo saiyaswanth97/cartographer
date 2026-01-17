@@ -2,6 +2,7 @@
 
 import cv2
 import numpy as np
+import onnxruntime as ort
 from typing import List, Tuple, Optional
 from abc import ABC, abstractmethod
 
@@ -172,166 +173,59 @@ class ORBDescriptor(SparseFeatureDescriptor):
         )
         super().__init__(detector, descriptor_dim=32, dtype=np.uint8)
 
-# class SIFTDescriptor:
-#     """
-#     SIFT feature extractor with configurable parameters.
 
-#     Extracts keypoints and descriptors from images using the SIFT algorithm.
-#     """
+class SuperPointDescriptor(SparseFeatureDescriptor):
+    """
+    SuperPoint feature extractor.
+    Note: This is a placeholder for a non-OpenCV backend implementation.
+    """
 
-#     def __init__(
-#         self,
-#         nfeatures: int = 0,
-#         n_octave_layers: int = 4,
-#         contrast_threshold: float = 0.04,
-#         edge_threshold: int = 10,
-#         sigma: float = 1.6
-#     ):
-#         """
-#         Initialize SIFT descriptor.
-
-#         Args:
-#             nfeatures: Maximum number of features to retain (0 = unlimited).
-#             n_octave_layers: Number of layers in each octave.
-#             contrast_threshold: Contrast threshold for filtering weak features.
-#             edge_threshold: Threshold for filtering edge-like features.
-#             sigma: Sigma of the Gaussian applied to input image at octave 0.
-#         """
-#         self.sift = cv2.SIFT_create(
-#             nfeatures=nfeatures,
-#             nOctaveLayers=n_octave_layers,
-#             contrastThreshold=contrast_threshold,
-#             edgeThreshold=edge_threshold,
-#             sigma=sigma
-#         )
-
-#     def compute(
-#         self,
-#         image: np.ndarray,
-#         mask: Optional[np.ndarray] = None
-#     ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
-#         """
-#         Detect and compute SIFT features.
-
-#         Args:
-#             image: Input image (BGR or grayscale).
-#             mask: Optional mask to restrict feature detection.
-
-#         Returns:
-#             Tuple of (keypoints list, descriptors array).
-#         """
-#         if image.ndim == 3:
-#             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-#         else:
-#             gray = image
-
-#         keypoints, descriptors = self.sift.detectAndCompute(gray, mask)
-
-#         if descriptors is None:
-#             return [], np.empty((0, 128), dtype=np.float32)
-
-#         return self.sort_by_strength(keypoints, descriptors)
-
-#     @staticmethod
-#     def sort_by_strength(
-#         keypoints: List[cv2.KeyPoint],
-#         descriptors: np.ndarray
-#     ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
-#         """
-#         Sort keypoints by response strength (descending).
-
-#         Args:
-#             keypoints: List of keypoints.
-#             descriptors: Corresponding descriptors.
-
-#         Returns:
-#             Tuple of (sorted keypoints, sorted descriptors).
-#         """
-#         idx = sorted(
-#             range(len(keypoints)),
-#             key=lambda i: keypoints[i].response,
-#             reverse=True
-#         )
-
-#         keypoints_sorted = [keypoints[i] for i in idx]
-#         descriptors_sorted = descriptors[idx]
-
-#         return keypoints_sorted, descriptors_sorted
-
-#     @staticmethod
-#     def draw_keypoints(
-#         image: np.ndarray,
-#         keypoints: List[cv2.KeyPoint],
-#         max_kp: int = 200
-#     ) -> np.ndarray:
-#         """
-#         Draw keypoints on image.
-
-#         Args:
-#             image: Input image.
-#             keypoints: List of keypoints to draw.
-#             max_kp: Maximum number of keypoints to draw.
-
-#         Returns:
-#             Image with keypoints drawn.
-#         """
-#         img = image.copy()
-#         kp = keypoints[:max_kp]
-#         return cv2.drawKeypoints(
-#             img,
-#             kp,
-#             None,
-#             flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
-#         )
+    def __init__(self, model_path: str = "weight/superpoint_2048.onnx"):
+        super().__init__(detector=None, descriptor_dim=256, dtype=np.float32)
+        self.model_path = model_path
         
-# class SURFDescriptor:
-#     """
-#     SURF feature extractor with configurable parameters.
-#     """
+        self.session = ort.InferenceSession(model_path)
+        # Load your SuperPoint model here
 
-#     def __init__(
-#         self,
-#         hessian_threshold: float = 400.0,
-#         n_octaves: int = 4,
-#         n_octave_layers: int = 3,
-#         extended: bool = False,
-#         upright: bool = False
-#     ):
-#         self.surf = cv2.xfeatures2d.SURF_create(
-#             hessianThreshold=hessian_threshold,
-#             nOctaves=n_octaves,
-#             nOctaveLayers=n_octave_layers,
-#             extended=extended,
-#             upright=upright
-#         )
+    def compute(
+        self,
+        image: np.ndarray,
+        mask: Optional[np.ndarray] = None
+    ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
+        """
+        Detect and compute SuperPoint features.
+        This method should be overridden to implement SuperPoint feature extraction.
+        """
+        # Implement SuperPoint feature extraction logic here
+        
+        if image.ndim == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        gray = gray.astype(np.float32) / 255.0
+        inp = gray[np.newaxis, np.newaxis, :, :]  # [1,1,H,W]
+        # TODO remove hardcoded input name
+        out = self.session.run(None, {"image": inp})
+        score = out[1][0]
+        kp = out[0][0]
+        desc = out[2][0]
+        print(out)
+        print(kp.shape)
+        print(score.shape)
+        print(desc.shape)
+        
+        kps = [
+            cv2.KeyPoint(float(p[0]), float(p[1]), int(s*50))
+            for p, s in zip(kp, score)
+        ]
+        
+        return kps, desc.astype(np.float32)
+    
 
-#     def compute(
-#         self,
-#         image: np.ndarray,
-#         mask: Optional[np.ndarray] = None
-#     ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
-
-#         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
-#         keypoints, descriptors = self.surf.detectAndCompute(gray, mask)
-
-#         if descriptors is None:
-#             return [], np.empty((0, 64 if not self.surf.extended else 128), dtype=np.float32)
-
-#         return self.sort_by_strength(keypoints, descriptors)
-
-#     @staticmethod
-#     def sort_by_strength(
-#         keypoints: List[cv2.KeyPoint],
-#         descriptors: np.ndarray
-#     ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
-
-#         idx = sorted(range(len(keypoints)), key=lambda i: keypoints[i].response, reverse=True)
-#         return [keypoints[i] for i in idx], descriptors[idx]
-
-#     @staticmethod
-#     def draw_keypoints(image, keypoints, max_kp=200):
-#         return cv2.drawKeypoints(
-#             image, keypoints[:max_kp], None,
-#             flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
-#         )
-
+if __name__ == "__main__":
+    # Example usage
+    # superpoint = SuperPointDescriptor(model_path="weight/superpoint_v6_from_tf.pth")
+    superpoint = SuperPointDescriptor(model_path="weight/superpoint_512.onnx")
+    image = np.zeros((480, 640), dtype=np.uint8)
+    out = superpoint.compute(image)
+    print(out)
