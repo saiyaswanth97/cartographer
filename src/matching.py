@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
+from matplotlib import pyplot as plt
 
 
 @dataclass
@@ -205,12 +206,35 @@ class SIFTMatcher2D:
 
         return M, mask, pts1
 
+    @staticmethod
+    def transform_points(
+        pts: List[cv2.KeyPoint],
+        M: np.ndarray
+    ) -> List[cv2.KeyPoint]:
+        """
+        Apply 2D transform to points.
+
+        Args:
+            pts: List of cv2.KeyPoint objects.
+            M: 2x3 transform matrix.
+
+        Returns:
+            Transformed points as a list of cv2.KeyPoint.
+        """
+        pts_array = np.array([kp.pt for kp in pts], dtype=np.float32)
+        pts_homog = np.hstack([pts_array, np.ones((pts_array.shape[0], 1), dtype=np.float32)])
+        pts_transformed = (M @ pts_homog.T).T
+
+        return [cv2.KeyPoint(x=pt[0], y=pt[1], size=kp.size)
+                for pt, kp in zip(pts_transformed, pts)]
+
     def match_and_estimate(
         self,
         kp1: List[cv2.KeyPoint],
         desc1: np.ndarray,
         kp2: List[cv2.KeyPoint],
-        desc2: np.ndarray
+        desc2: np.ndarray,
+        M_intial: Optional[np.ndarray] = None
     ) -> MatchResult:
         """
         Full matching pipeline with RANSAC validation.
@@ -220,6 +244,7 @@ class SIFTMatcher2D:
             desc1: Descriptors from first image.
             kp2: Keypoints from second image.
             desc2: Descriptors from second image.
+            M_intial: Optional initial transform estimate.
 
         Returns:
             MatchResult object containing transform and match information.
@@ -235,7 +260,12 @@ class SIFTMatcher2D:
                 success=False
             )
 
-        M, inlier_mask, _ = self.estimate_transform(kp1, kp2, matches)
+        if M_intial is not None:
+            kp1_t = self.transform_points(kp1, M_intial)
+            M, inlier_mask, _ = self.estimate_transform(kp1_t, kp2, matches)
+            M = (M @ np.vstack([M_intial, [0, 0, 1]]))[:2, :]
+        else:
+            M, inlier_mask, _ = self.estimate_transform(kp1, kp2, matches)
 
         if M is None:
             return MatchResult(
@@ -331,3 +361,40 @@ class SIFTMatcher2D:
             'rotation': rotation,
             'translation': translation
         }
+    
+    @staticmethod
+    def get_transform(scale: float, rotation: float, image_width: float, image_height: float) -> np.ndarray:
+        """
+        Construct a 2D similarity transform matrix that rotates around the image center.
+
+        Args:
+            scale: Scaling factor.
+            rotation: Rotation angle in degrees.
+            image_width: Width of the image.
+            image_height: Height of the image.
+
+        Returns:
+            2x3 similarity transform matrix.
+        """
+        theta = np.radians(rotation)
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+
+        # Compute center of the image
+        cx = image_width / 2.0
+        cy = image_height / 2.0
+
+        # Rotation and scale components
+        a = scale * cos_theta
+        b = scale * sin_theta
+
+        # Translation to rotate around center: T = center - R * center
+        tx = cx - (a * cx - b * cy)
+        ty = cy - (b * cx + a * cy)
+
+        M = np.array([
+            [a, -b, tx],
+            [b,  a, ty]
+        ], dtype=np.float32)
+
+        return M
