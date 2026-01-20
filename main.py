@@ -28,7 +28,7 @@ def setup_logging(config):
     return logging.getLogger(__name__)
 
 
-def run_matching_pipeline(config, drone_image_file: str = None, map_location: tuple = None):
+def run_matching_pipeline_v2(config, drone_image_file: str = None, map_location: tuple = None):
     """
     Run the complete matching pipeline.
 
@@ -42,6 +42,25 @@ def run_matching_pipeline(config, drone_image_file: str = None, map_location: tu
     """
     logger = setup_logging(config)
 
+    # Use provided location or default from ground truth
+    if map_location:
+        px, py = map_location
+    else:
+        # Default: ground truth location for 1485.025665088.png
+        px, py = 2811, 3651
+    map_query = MapQuery(config.paths.map_tif)
+    map_patch, window = map_query.extract_patch(
+        px, py,
+        config.map_extraction.default_patch_size,
+        allow_clip=config.map_extraction.allow_clip
+    )
+    map_img = map_query.patch_to_opencv(map_patch)
+    logger.info(f"Extracted map patch at ({px}, {py}): {map_img.shape}")
+
+    # Compute features
+    feature_extraction = SuperPointDescriptor()
+    kp2, desc2 = feature_extraction.compute(map_img)
+    
     # Load drone image
     logger.info("Loading drone image...")
     drone_handler = DroneImage(
@@ -56,55 +75,6 @@ def run_matching_pipeline(config, drone_image_file: str = None, map_location: tu
     )
     logger.info(f"Loaded drone image: {drone_img_raw.shape}")
 
-    # Preprocess drone image
-    drone_img = DroneImage.preprocess(
-        drone_img_raw,
-        scale=config.preprocessing.scale,
-        rotation=config.preprocessing.rotation
-    )
-    logger.info(f"Preprocessed drone image: {drone_img.shape} "
-                f"(scale={config.preprocessing.scale}, rot={config.preprocessing.rotation})")
-
-    # Load map and extract patch
-    logger.info("Loading map...")
-    map_query = MapQuery(config.paths.map_tif)
-
-    # Use provided location or default from ground truth
-    if map_location:
-        px, py = map_location
-    else:
-        # Default: ground truth location for 1485.025665088.png
-        px, py = 2811, 3651
-
-    map_patch, window = map_query.extract_patch(
-        px, py,
-        config.map_extraction.default_patch_size,
-        allow_clip=config.map_extraction.allow_clip
-    )
-    map_img = map_query.patch_to_opencv(map_patch)
-    logger.info(f"Extracted map patch at ({px}, {py}): {map_img.shape}")
-
-    # Visualize inputs
-    # if config.visualization.enabled:
-    if False:
-        visualize_side_by_side(
-            drone_img, map_img,
-            title="Input Images",
-            labels=("Drone (preprocessed)", "Map Patch")
-        )
-
-    # Compute features
-    # sift = SIFTDescriptor()
-    # sift = SURFDescriptor()
-    # sift = ORBDescriptor()
-    sift = SuperPointDescriptor()
-
-    kp1, desc1 = sift.compute(drone_img)
-    kp2, desc2 = sift.compute(map_img)
-    logger.info(f"Keypoints: drone={len(kp1)}, map={len(kp2)}")
-
-    # Match features
-    logger.info("Matching features...")
     matcher = SIFTMatcher2D(
         model=config.matching.model,
         ratio_thresh=config.matching.ratio_thresh,
@@ -112,8 +82,34 @@ def run_matching_pipeline(config, drone_image_file: str = None, map_location: tu
         confidence=config.matching.confidence,
         min_inliers=config.matching.min_inliers
     )
+    
+    # Preprocess drone image
+    for angle in range(-180, 181, 20):
+        drone_img_iter = DroneImage.preprocess(
+            drone_img_raw,
+            scale=config.preprocessing.scale,
+            rotation=angle
+        )
 
-    result = matcher.match_and_estimate(kp1, desc1, kp2, desc2)
+        kp1, desc1 = feature_extraction.compute(drone_img_iter)
+        
+        result = matcher.match_and_estimate(kp1, desc1, kp2, desc2)
+        if result.success:
+            scale_ = matcher.decompose_similarity(result.transform)['scale']
+            angle_ = matcher.decompose_similarity(result.transform)['rotation'] + angle
+
+            drone_img_final = DroneImage.preprocess(
+                drone_img_raw,
+                scale=scale_,
+                rotation=angle_
+            )
+            kp1, desc1 = feature_extraction.compute(drone_img_final)
+            result = matcher.match_and_estimate(kp1, desc1, kp2, desc2)
+            # T_pre = matcher.get_transform(scale_, -angle_, drone_img_raw.shape[1], drone_img_raw.shape[0])
+            # result.transform = T_pre @ np.vstack([result.transform, [0, 0, 1]])
+
+            drone_img = drone_img_final
+            break
 
     # Process results
     if result.success:
@@ -242,7 +238,7 @@ def main():
     if args.map_x is not None and args.map_y is not None:
         map_location = (args.map_x, args.map_y)
 
-    result = run_matching_pipeline(
+    result = run_matching_pipeline_v2(
         config,
         drone_image_file=args.image,
         map_location=map_location
