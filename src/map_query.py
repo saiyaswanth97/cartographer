@@ -133,6 +133,7 @@ class MapQuery:
         x: int,
         y: int,
         patch_size: int,
+        scale: float = 1.5,
         allow_clip: bool = True
     ) -> Tuple[np.ndarray, rasterio.windows.Window]:
         """
@@ -142,6 +143,7 @@ class MapQuery:
             x: Center X pixel coordinate
             y: Center Y pixel coordinate
             patch_size: Size of the square patch
+            scale: Scaling factor (1 = original size, 2 = half size, etc.). It can be fractional.
             allow_clip: If True, clip patch at boundaries. If False, raise error.
 
         Returns:
@@ -150,6 +152,9 @@ class MapQuery:
         Raises:
             ValueError: If coordinates are invalid.
         """
+        if patch_size <= 0:
+            patch_size = max(self.ds.width, self.ds.height) * 2  # Large value to get full image
+
         if not self.check_within_bounds(x, y):
             raise ValueError("Center coordinates are out of bounds of the dataset.")
 
@@ -164,7 +169,17 @@ class MapQuery:
         ).intersection(rasterio.windows.Window(0, 0, self.ds.width, self.ds.height))
 
         patch = self.ds.read(window=window)
-        return patch, window
+        
+        patch_scaled = cv2.resize(
+            patch.transpose(1, 2, 0),  # to (h, w, bands)
+            dsize=(
+                int(window.width / scale),
+                int(window.height / scale)
+            ),
+            interpolation=cv2.INTER_LINEAR
+        ).transpose(2, 0, 1)  # back to (bands, h, w)
+
+        return patch_scaled, window
 
     def patch_to_opencv(self, patch: np.ndarray, hist_eq: bool = False) -> np.ndarray:
         """
