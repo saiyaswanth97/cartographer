@@ -218,10 +218,57 @@ class SuperPointDescriptor(SparseFeatureDescriptor):
         return kps, desc.astype(np.float32)
     
 
+class DISKDescriptor(SparseFeatureDescriptor):
+    """
+    DISK feature extractor.
+    Note: This is a placeholder for a non-OpenCV backend implementation.
+    """
+
+    def __init__(self, model_path: str = "weight/disk.onnx"):
+        super().__init__(detector=None, descriptor_dim=128, dtype=np.float32)
+        self.model_path = model_path
+        
+        self.session = ort.InferenceSession(model_path)
+        # Load your DISK model here
+
+    def compute(
+        self,
+        image: np.ndarray,
+        mask: Optional[np.ndarray] = None
+    ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
+        """
+        Detect and compute DISK features.
+        This method should be overridden to implement DISK feature extraction.
+        """
+        # Implement DISK feature extraction logic here
+        # It takes 13HW input
+        input = image.astype(np.float32) / 255.0
+        input = input.transpose(2, 0, 1)  # HWC to CHW
+        input = input[np.newaxis, :, :, :]  # 1CHW
+
+        # TODO remove hardcoded input name
+        out = self.session.run(None, {"image": input})
+        score = out[1][0]
+        kp = out[0][0]
+        desc = out[2][0]
+        
+        kps = [
+            cv2.KeyPoint(float(p[0]), float(p[1]), int(s*50))
+            for p, s in zip(kp, score)
+        ]
+        
+        return kps, desc.astype(np.float32)
+    
+
 if __name__ == "__main__":
     # Example usage
     # superpoint = SuperPointDescriptor(model_path="weight/superpoint_v6_from_tf.pth")
     superpoint = SuperPointDescriptor(model_path="weight/superpoint_512.onnx")
     image = np.zeros((480, 640), dtype=np.uint8)
+    out = superpoint.compute(image)
+    print(out)
+
+    superpoint = DISKDescriptor(model_path="weight/disk.onnx")
+    image = np.zeros((480, 640, 3), dtype=np.uint8)
     out = superpoint.compute(image)
     print(out)
