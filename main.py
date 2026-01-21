@@ -13,7 +13,8 @@ import numpy as np
 from src.config import load_config
 from src.map_query import MapQuery
 from src.drone_image import DroneImage
-from src.feature_extraction import SuperPointDescriptor
+from src.feature_extraction import SuperPointDescriptor, DISKDescriptor
+from src.dl_e2e_matching import SuperPointLightGlue, DiskLightGlue
 from src.matching import SIFTMatcher2D
 from src.visualization import visualize_matching_results
 
@@ -57,7 +58,8 @@ def run_matching_pipeline(config, drone_image_file: str = None, map_location: tu
     logger.info(f"Extracted map patch at ({px}, {py}): {map_img.shape}")
 
     # Compute map features
-    feature_extraction = SuperPointDescriptor()
+    # feature_extraction = SuperPointDescriptor()
+    feature_extraction = DISKDescriptor()
     kp2, desc2 = feature_extraction.compute(map_img)
 
     # Load drone image
@@ -71,6 +73,7 @@ def run_matching_pipeline(config, drone_image_file: str = None, map_location: tu
         img_filename=drone_image_file or '1537.017421696.png',
         undistort=config.preprocessing.undistort
     )
+    drone_img = drone_img_raw
     logger.info(f"Loaded drone image: {drone_img_raw.shape}")
 
     matcher = SIFTMatcher2D(
@@ -113,8 +116,6 @@ def run_matching_pipeline(config, drone_image_file: str = None, map_location: tu
 
             # Update transform to map from raw drone image to map
             result.transform = (result.transform @ T_pre_h)[:2, :]
-
-            drone_img = drone_img_raw
             break
 
     # Process results
@@ -125,6 +126,163 @@ def run_matching_pipeline(config, drone_image_file: str = None, map_location: tu
         logger.info(f"  - Inlier ratio: {result.inlier_ratio:.1%}")
 
         params = matcher.decompose_similarity(result.transform)
+        if params['scale']:
+            logger.info(f"Transform: scale={params['scale']:.3f}, "
+                        f"rotation={params['rotation']:.1f}deg")
+
+        # Estimate location by transforming drone image center
+        h, w = drone_img.shape[:2]
+        center = np.array([[w/2, h/2, 1]], dtype=np.float32)
+        map_center = (result.transform @ center.T).T[0]
+
+        # Convert to global coordinates
+        global_x = window.col_off + map_center[0]
+        global_y = window.row_off + map_center[1]
+
+        # Convert to lat/lon
+        lat, lon = map_query.convert_pixel_to_latlon(global_x, global_y)
+
+        logger.info("Estimated location:")
+        logger.info(f"  Pixel: ({global_x:.1f}, {global_y:.1f})")
+        logger.info(f"  Lat/Lon: ({lat:.6f}, {lon:.6f})")
+
+        output = {
+            'success': True,
+            'pixel_location': (global_x, global_y),
+            'lat_lon': (lat, lon),
+            'num_inliers': result.num_inliers,
+            'inlier_ratio': result.inlier_ratio,
+            'transform': result.transform,
+            'transform_params': params
+        }
+    else:
+        logger.warning("Matching failed - not enough inliers")
+        output = {
+            'success': False,
+            'num_matches': result.num_matches,
+            'num_inliers': result.num_inliers
+        }
+
+    # Visualization
+    if config.visualization.enabled or config.visualization.save_results:
+        save_path = config.visualization.output_file if config.visualization.save_results else None
+        visualize_matching_results(
+            drone_img, map_img,
+            kp1, kp2,
+            result.inliers, result.all_matches,
+            result.transform,
+            save_path=save_path,
+            show=config.visualization.enabled,
+            max_keypoints=config.visualization.max_keypoints_draw,
+            max_matches=config.visualization.max_matches_draw
+        )
+        if save_path:
+            logger.info(f"Saved visualization to {save_path}")
+
+    return output
+
+
+def run_matching_e2e_pipeline(config, drone_image_file: str = None, map_location: tuple = None):
+    """
+    Run the complete matching pipeline.
+
+    Args:
+        config: Configuration object.
+        drone_image_file: Override drone image filename.
+        map_location: Override map extraction location (x, y).
+
+    Returns:
+        Dictionary with matching results.
+    """
+    logger = setup_logging(config)
+
+    # Use provided location or default from ground truth
+    if map_location:
+        px, py = map_location
+    else:
+        px, py = 2811, 3651
+
+    map_query = MapQuery(config.paths.map_tif)
+    map_patch, window = map_query.extract_patch(
+        px, py,
+        config.map_extraction.default_patch_size,
+        allow_clip=config.map_extraction.allow_clip
+    )
+    map_img = map_query.patch_to_opencv(map_patch)
+    logger.info(f"Extracted map patch at ({px}, {py}): {map_img.shape}")
+
+    # Load drone image
+    logger.info("Loading drone image...")
+    drone_handler = DroneImage(
+        img_data_path=config.paths.drone_images_dir,
+        calibration_file_path=config.paths.camera_calibration
+    )
+
+    drone_img_raw = drone_handler.get_image(
+        img_filename=drone_image_file or '1537.017421696.png',
+        undistort=config.preprocessing.undistort
+    )
+    drone_img = drone_img_raw
+    logger.info(f"Loaded drone image: {drone_img_raw.shape}")
+
+    matcher = DiskLightGlue()
+    # matcher = SuperPointLightGlue()
+    pose_estimation = SIFTMatcher2D(
+        model=config.matching.model,
+        ratio_thresh=config.matching.ratio_thresh,
+        ransac_thresh=config.matching.ransac_thresh,
+        confidence=config.matching.confidence,
+        min_inliers=config.matching.min_inliers
+    )
+
+    # Search for best matching angle
+    for angle in range(-80, 181, 20):
+        print(f"Trying angle: {angle} degrees")
+        drone_img_iter, _ = DroneImage.preprocess(
+            drone_img_raw,
+            scale=config.preprocessing.scale,
+            rotation=angle
+        )
+
+        kp1, kp2, matches, scores = matcher.compute_and_match(drone_img_iter, map_img)
+        if len(matches) < config.matching.min_inliers:
+            continue
+
+        results = pose_estimation.match_and_estimate(kp1, None, kp2, None, matches=matches)
+        
+        if results.success:
+            # Refine with estimated scale and rotation
+            params = pose_estimation.decompose_similarity(results.transform)
+            scale_ = params['scale']
+            angle_ = params['rotation'] + angle
+
+            drone_img_final, T_pre = DroneImage.preprocess(
+                drone_img_raw,
+                scale=scale_,
+                rotation=angle_
+            )
+            kp1_t, kp2, matches, scores = matcher.compute_and_match(drone_img_final, map_img)
+            if len(matches) < config.matching.min_inliers:
+                continue
+
+            result = pose_estimation.match_and_estimate(kp1_t, None, kp2, None, matches=matches)
+            # For visualization, transform keypoints back to raw image coordinates
+            T_pre_h = np.vstack([T_pre, [0, 0, 1]])
+            T_pre_inv = np.linalg.inv(T_pre_h)[:2, :]
+            kp1 = pose_estimation.transform_points(kp1_t, T_pre_inv)
+            # Update transform to map from raw drone image to map
+            result.transform = (result.transform @ T_pre_h)[:2, :]
+            break
+
+
+    # Process results
+    if result.success:
+        logger.info("Matching succeeded!")
+        logger.info(f"  - Matches after ratio test: {result.num_matches}")
+        logger.info(f"  - Inliers after RANSAC: {result.num_inliers}")
+        logger.info(f"  - Inlier ratio: {result.inlier_ratio:.1%}")
+
+        params = pose_estimation.decompose_similarity(result.transform)
         if params['scale']:
             logger.info(f"Transform: scale={params['scale']:.3f}, "
                         f"rotation={params['rotation']:.1f}deg")
@@ -236,7 +394,7 @@ def main():
     if args.map_x is not None and args.map_y is not None:
         map_location = (args.map_x, args.map_y)
 
-    result = run_matching_pipeline(
+    result = run_matching_e2e_pipeline(
         config,
         drone_image_file=args.image,
         map_location=map_location
