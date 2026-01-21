@@ -79,7 +79,7 @@ class DroneImage:
         rotation: float = 0.0,
         expand_canvas: bool = True,
         hist_eq: bool = False
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Preprocess drone image with scaling and rotation.
 
@@ -92,35 +92,35 @@ class DroneImage:
 
         Returns:
             Preprocessed image.
+            Transformation matrix (2x3 affine) applied to the image.
         """
-        # Scale
-        if scale != 1.0:
-            img = cv2.resize(img, None, fx=scale, fy=scale)
+        h, w = img.shape[:2]
 
-        # Rotate
-        if rotation != 0.0:
-            h, w = img.shape[:2]
-            M = cv2.getRotationMatrix2D((w // 2, h // 2), rotation, 1.0)
+        # Create rotation+scale matrix around image center
+        M = cv2.getRotationMatrix2D((w / 2, h / 2), rotation, scale)
 
-            if expand_canvas:
-                # Expand canvas to fit rotated image
-                cos = np.abs(M[0, 0])
-                sin = np.abs(M[0, 1])
-                new_w = int(h * sin + w * cos)
-                new_h = int(h * cos + w * sin)
-                M[0, 2] += (new_w - w) / 2
-                M[1, 2] += (new_h - h) / 2
-                img = cv2.warpAffine(img, M, (new_w, new_h))
-            else:
-                img = cv2.warpAffine(img, M, (w, h))
+        if rotation != 0.0 and expand_canvas:
+            # Expand canvas to fit rotated image
+            cos = np.abs(M[0, 0])
+            sin = np.abs(M[0, 1])
+            new_w = int(h * sin + w * cos)
+            new_h = int(h * cos + w * sin)
+            M[0, 2] += (new_w - w) / 2
+            M[1, 2] += (new_h - h) / 2
+            img = cv2.warpAffine(img, M, (new_w, new_h))
+        elif rotation != 0.0 or scale != 1.0:
+            # Apply transform without canvas expansion
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            img = cv2.warpAffine(img, M, (new_w, new_h))
 
         if hist_eq:
             # Apply histogram equalization to each channel
             img_yuv = cv2.cvtColor(img, cv2.COLOR_BGR2YUV)
             img_yuv[:, :, 0] = cv2.equalizeHist(img_yuv[:, :, 0])
             img = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
-            
-        return img
+
+        return img, M
 
     @staticmethod
     def get_image_center(img: np.ndarray) -> Tuple[float, float]:
@@ -133,11 +133,12 @@ if __name__ == "__main__":
     # Example usage
     drone_handler = DroneImage()
     img = drone_handler.get_image('1485.025665088.png', undistort=False)
-    preprocessed_img = DroneImage.preprocess(img, scale=0.5, rotation=30)
+    preprocessed_img, T = DroneImage.preprocess(img, scale=0.5, rotation=30)
     center = DroneImage.get_image_center(preprocessed_img)
     print(f"Image center: {center}")
-    
-    img_rotated = DroneImage.preprocess(img, scale=1.0, rotation=15, expand_canvas=True)
+    print(f"Transform matrix:\n{T}")
+
+    img_rotated, _ = DroneImage.preprocess(img, scale=1.0, rotation=15, expand_canvas=True)
     plt.imshow(cv2.cvtColor(img_rotated, cv2.COLOR_BGR2RGB))
     plt.title("Rotated Image with Expanded Canvas")
     plt.axis('off')

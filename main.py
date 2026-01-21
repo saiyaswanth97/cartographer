@@ -3,20 +3,19 @@
 Cartographer - Drone to Map Matching Pipeline
 
 Main entry point for the drone image localization system.
-Uses SIFT feature matching to locate drone images on satellite maps.
+Uses feature matching to locate drone images on satellite maps.
 """
 
 import argparse
 import logging
 import numpy as np
-from pathlib import Path
 
 from src.config import load_config
 from src.map_query import MapQuery
 from src.drone_image import DroneImage
-from src.feature_extraction import SIFTDescriptor, SURFDescriptor, ORBDescriptor, SuperPointDescriptor
+from src.feature_extraction import SuperPointDescriptor
 from src.matching import SIFTMatcher2D
-from src.visualization import visualize_matching_results, visualize_side_by_side
+from src.visualization import visualize_matching_results
 
 
 def setup_logging(config):
@@ -28,7 +27,7 @@ def setup_logging(config):
     return logging.getLogger(__name__)
 
 
-def run_matching_pipeline_v2(config, drone_image_file: str = None, map_location: tuple = None):
+def run_matching_pipeline(config, drone_image_file: str = None, map_location: tuple = None):
     """
     Run the complete matching pipeline.
 
@@ -46,8 +45,8 @@ def run_matching_pipeline_v2(config, drone_image_file: str = None, map_location:
     if map_location:
         px, py = map_location
     else:
-        # Default: ground truth location for 1485.025665088.png
         px, py = 2811, 3651
+
     map_query = MapQuery(config.paths.map_tif)
     map_patch, window = map_query.extract_patch(
         px, py,
@@ -57,10 +56,10 @@ def run_matching_pipeline_v2(config, drone_image_file: str = None, map_location:
     map_img = map_query.patch_to_opencv(map_patch)
     logger.info(f"Extracted map patch at ({px}, {py}): {map_img.shape}")
 
-    # Compute features
+    # Compute map features
     feature_extraction = SuperPointDescriptor()
     kp2, desc2 = feature_extraction.compute(map_img)
-    
+
     # Load drone image
     logger.info("Loading drone image...")
     drone_handler = DroneImage(
@@ -69,7 +68,6 @@ def run_matching_pipeline_v2(config, drone_image_file: str = None, map_location:
     )
 
     drone_img_raw = drone_handler.get_image(
-        # img_filename=drone_image_file or '1485.025665088.png',
         img_filename=drone_image_file or '1537.017421696.png',
         undistort=config.preprocessing.undistort
     )
@@ -82,59 +80,59 @@ def run_matching_pipeline_v2(config, drone_image_file: str = None, map_location:
         confidence=config.matching.confidence,
         min_inliers=config.matching.min_inliers
     )
-    
-    # Preprocess drone image
+
+    # Search for best matching angle
     for angle in range(-180, 181, 20):
-        drone_img_iter = DroneImage.preprocess(
+        drone_img_iter, _ = DroneImage.preprocess(
             drone_img_raw,
             scale=config.preprocessing.scale,
             rotation=angle
         )
 
         kp1, desc1 = feature_extraction.compute(drone_img_iter)
-        
         result = matcher.match_and_estimate(kp1, desc1, kp2, desc2)
-        if result.success:
-            scale_ = matcher.decompose_similarity(result.transform)['scale']
-            angle_ = matcher.decompose_similarity(result.transform)['rotation'] + angle
 
-            drone_img_final = DroneImage.preprocess(
+        if result.success:
+            # Refine with estimated scale and rotation
+            params = matcher.decompose_similarity(result.transform)
+            scale_ = params['scale']
+            angle_ = params['rotation'] + angle
+
+            drone_img_final, T_pre = DroneImage.preprocess(
                 drone_img_raw,
                 scale=scale_,
                 rotation=angle_
             )
-            kp1, desc1 = feature_extraction.compute(drone_img_final)
-            result = matcher.match_and_estimate(kp1, desc1, kp2, desc2)
-            # T_pre = matcher.get_transform(scale_, -angle_, drone_img_raw.shape[1], drone_img_raw.shape[0])
-            # result.transform = T_pre @ np.vstack([result.transform, [0, 0, 1]])
+            kp1_t, desc1 = feature_extraction.compute(drone_img_final)
+            result = matcher.match_and_estimate(kp1_t, desc1, kp2, desc2)
 
-            drone_img = drone_img_final
+            # For visualization, transform keypoints back to raw image coordinates
+            T_pre_h = np.vstack([T_pre, [0, 0, 1]])
+            T_pre_inv = np.linalg.inv(T_pre_h)[:2, :]
+            kp1 = matcher.transform_points(kp1_t, T_pre_inv)
+
+            # Update transform to map from raw drone image to map
+            result.transform = (result.transform @ T_pre_h)[:2, :]
+
+            drone_img = drone_img_raw
             break
 
     # Process results
     if result.success:
-        logger.info(f"Matching succeeded!")
+        logger.info("Matching succeeded!")
         logger.info(f"  - Matches after ratio test: {result.num_matches}")
         logger.info(f"  - Inliers after RANSAC: {result.num_inliers}")
         logger.info(f"  - Inlier ratio: {result.inlier_ratio:.1%}")
 
-        # Decompose transform
         params = matcher.decompose_similarity(result.transform)
         if params['scale']:
             logger.info(f"Transform: scale={params['scale']:.3f}, "
-                       f"rotation={params['rotation']:.1f}deg")
+                        f"rotation={params['rotation']:.1f}deg")
 
-        # Estimate location
+        # Estimate location by transforming drone image center
         h, w = drone_img.shape[:2]
-        center = np.array([[w/2, h/2]], dtype=np.float32)
-
-        if result.transform.shape[0] == 2:
-            center_homog = np.hstack([center, np.ones((1, 1))])
-            map_center = (result.transform @ center_homog.T).T[0]
-        else:
-            center_homog = np.hstack([center, np.ones((1, 1))])
-            map_center_homog = (result.transform @ center_homog.T).T[0]
-            map_center = map_center_homog[:2] / map_center_homog[2]
+        center = np.array([[w/2, h/2, 1]], dtype=np.float32)
+        map_center = (result.transform @ center.T).T[0]
 
         # Convert to global coordinates
         global_x = window.col_off + map_center[0]
@@ -143,7 +141,7 @@ def run_matching_pipeline_v2(config, drone_image_file: str = None, map_location:
         # Convert to lat/lon
         lat, lon = map_query.convert_pixel_to_latlon(global_x, global_y)
 
-        logger.info(f"Estimated location:")
+        logger.info("Estimated location:")
         logger.info(f"  Pixel: ({global_x:.1f}, {global_y:.1f})")
         logger.info(f"  Lat/Lon: ({lat:.6f}, {lon:.6f})")
 
@@ -238,14 +236,14 @@ def main():
     if args.map_x is not None and args.map_y is not None:
         map_location = (args.map_x, args.map_y)
 
-    result = run_matching_pipeline_v2(
+    result = run_matching_pipeline(
         config,
         drone_image_file=args.image,
         map_location=map_location
     )
 
     # Print summary
-    print("="*60)
+    print("=" * 60)
     if result['success']:
         print("MATCHING SUCCESSFUL")
         print(f"  Location: {result['lat_lon'][0]:.6f}, {result['lat_lon'][1]:.6f}")
@@ -254,8 +252,7 @@ def main():
         print("MATCHING FAILED")
         print(f"  Matches: {result.get('num_matches', 0)}")
         print(f"  Inliers: {result.get('num_inliers', 0)}")
-    print("="*60)
-    print("\n")
+    print("=" * 60)
 
     return 0 if result['success'] else 1
 
