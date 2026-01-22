@@ -9,35 +9,60 @@ paths:
   ground_truth: "data/train_data/ground_truth.csv"
   output_dir: "output/"
 
+# Model weights
+weights:
+  superpoint_lightglue: "weight/superpoint_lightglue_pipeline.onnx"
+  disk_lightglue: "weight/disk_lightglue_end2end_fused_cpu.onnx"
+  disk_descriptor: "weight/disk_descriptor.onnx"
+  superpoint_descriptor: "weight/superpoint_descriptor.onnx"
+
+# Pipeline settings
+pipeline:
+  type: "e2e"  # "e2e" (end-to-end LightGlue) or "descriptor" (descriptor matching)
+  feature_extractor: "superpoint"  # "superpoint" or "disk"
+
+# Input settings
+input:
+  drone_image: "1537.017421696.png"
+  map_center_x: 2811
+  map_center_y: 3651
+
 # Drone image preprocessing
 preprocessing:
-  scale: 1.0 # Scale factor for drone image
-  rotation: -60 # Rotation in degrees (drone heading offset from north)
-  undistort: false # Whether to apply camera undistortion
+  scale: 1.0
+  rotation: 0
+  undistort: false
+
+# Angle search for rotation-variant features
+angle_search:
+  enabled: true
+  start: -180
+  end: 180
+  step: 20
+  refine: true
 
 # Map extraction
 map_extraction:
-  default_patch_size: 3000 # Default patch size in pixels
-  allow_clip: true # Allow patches to be clipped at boundaries
+  default_patch_size: 1200
+  allow_clip: true
 
 # Feature matching
 matching:
-  model: "similarity" # Transform model: "similarity", "affine", "homography"
-  ratio_thresh: 0.95 # Lowe's ratio test threshold (higher = more permissive)
-  ransac_thresh: 0.05 # RANSAC reprojection threshold in normalized pixels
-  confidence: 0.99 # RANSAC confidence level
-  min_inliers: 20 # Minimum inliers for valid match
+  model: "similarity"
+  ratio_thresh: 0.95
+  ransac_thresh: 0.01
+  confidence: 0.99
+  min_inliers: 20
 
 # Visualization
 visualization:
-  enabled: true # Toggle visualization on/off
-  save_results: true # Save visualization to file
+  enabled: true
+  save_results: true
   output_file: "matching_results.png"
-  max_keypoints_draw: 100 # Max keypoints to draw
-  max_matches_draw: 50 # Max matches to draw
+  max_keypoints_draw: 10000
+  max_matches_draw: 500
 
 # Logging
 logging:
-  level: "INFO" # DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
   format: "%(levelname)s - %(message)s"
-  # format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

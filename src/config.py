@@ -3,7 +3,7 @@
 import yaml
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Tuple
 
 
 @dataclass
@@ -16,10 +16,48 @@ class PathsConfig:
 
 
 @dataclass
+class WeightsConfig:
+    superpoint_lightglue: str = "weight/superpoint_lightglue_pipeline.onnx"
+    disk_lightglue: str = "weight/disk_lightglue_end2end_fused_cpu.onnx"
+    disk_descriptor: str = "weight/disk_descriptor.onnx"
+    superpoint_descriptor: str = "weight/superpoint_descriptor.onnx"
+
+
+@dataclass
+class PipelineConfig:
+    type: str = "e2e"  # "e2e" or "descriptor"
+    feature_extractor: str = "superpoint"  # "superpoint" or "disk"
+
+
+@dataclass
+class InputConfig:
+    drone_image: str = "1537.017421696.png"
+    map_center_x: int = 2811
+    map_center_y: int = 3651
+
+    @property
+    def map_location(self) -> Tuple[int, int]:
+        return (self.map_center_x, self.map_center_y)
+
+
+@dataclass
 class PreprocessingConfig:
-    scale: float = 0.4
-    rotation: float = -75.0
+    scale: float = 1.0
+    rotation: float = 0.0
     undistort: bool = False
+
+
+@dataclass
+class AngleSearchConfig:
+    enabled: bool = True
+    start: int = -180
+    end: int = 180
+    step: int = 20
+    refine: bool = True
+
+    @property
+    def range(self) -> Tuple[int, int, int]:
+        return (self.start, self.end + 1, self.step)
 
 
 @dataclass
@@ -56,11 +94,22 @@ class LoggingConfig:
 class Config:
     """Main configuration container."""
     paths: PathsConfig = field(default_factory=PathsConfig)
+    weights: WeightsConfig = field(default_factory=WeightsConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    input: InputConfig = field(default_factory=InputConfig)
     preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
+    angle_search: AngleSearchConfig = field(default_factory=AngleSearchConfig)
     map_extraction: MapExtractionConfig = field(default_factory=MapExtractionConfig)
     matching: MatchingConfig = field(default_factory=MatchingConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+
+
+def _load_section(data: dict, key: str, cls):
+    """Load a config section if present in data."""
+    if key in data:
+        return cls(**data[key])
+    return cls()
 
 
 def load_config(config_path: Optional[str] = None) -> Config:
@@ -68,15 +117,12 @@ def load_config(config_path: Optional[str] = None) -> Config:
     Load configuration from YAML file.
 
     Args:
-        config_path: Path to config YAML file. If None, uses default config.
+        config_path: Path to config YAML file. If None, searches default locations.
 
     Returns:
         Config object with all settings.
     """
-    config = Config()
-
     if config_path is None:
-        # Try default locations
         default_paths = [
             Path("config/config.yaml"),
             Path("config.yaml"),
@@ -87,21 +133,21 @@ def load_config(config_path: Optional[str] = None) -> Config:
                 config_path = str(path)
                 break
 
-    if config_path and Path(config_path).exists():
-        with open(config_path, 'r') as f:
-            data = yaml.safe_load(f)
+    if not config_path or not Path(config_path).exists():
+        return Config()
 
-        if 'paths' in data:
-            config.paths = PathsConfig(**data['paths'])
-        if 'preprocessing' in data:
-            config.preprocessing = PreprocessingConfig(**data['preprocessing'])
-        if 'map_extraction' in data:
-            config.map_extraction = MapExtractionConfig(**data['map_extraction'])
-        if 'matching' in data:
-            config.matching = MatchingConfig(**data['matching'])
-        if 'visualization' in data:
-            config.visualization = VisualizationConfig(**data['visualization'])
-        if 'logging' in data:
-            config.logging = LoggingConfig(**data['logging'])
+    with open(config_path, 'r') as f:
+        data = yaml.safe_load(f)
 
-    return config
+    return Config(
+        paths=_load_section(data, 'paths', PathsConfig),
+        weights=_load_section(data, 'weights', WeightsConfig),
+        pipeline=_load_section(data, 'pipeline', PipelineConfig),
+        input=_load_section(data, 'input', InputConfig),
+        preprocessing=_load_section(data, 'preprocessing', PreprocessingConfig),
+        angle_search=_load_section(data, 'angle_search', AngleSearchConfig),
+        map_extraction=_load_section(data, 'map_extraction', MapExtractionConfig),
+        matching=_load_section(data, 'matching', MatchingConfig),
+        visualization=_load_section(data, 'visualization', VisualizationConfig),
+        logging=_load_section(data, 'logging', LoggingConfig),
+    )
