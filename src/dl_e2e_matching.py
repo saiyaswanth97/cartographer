@@ -5,6 +5,8 @@ import onnxruntime as ort
 import numpy as np
 from typing import Tuple, List
 from matplotlib import pyplot as plt
+from src.matching_v2 import LightGlueMatcher
+from src.feature_extraction import SuperPointDescriptor, DISKDescriptor
 
 
 class SuperPointLightGlue:
@@ -47,7 +49,6 @@ class SuperPointLightGlue:
         input = np.concatenate([input_1, input_2], axis=0)
         kp, matches, scores = self.session.run(None, {"images": input})
         matches = matches[:, 1:]
-        print(f"Keypoint shape: {kp.shape}, Matches shape: {matches.shape}, Scores shape: {scores.shape}")
 
         kp1 = [
             cv2.KeyPoint(float(p[0]*img1.shape[1]/512), float(p[1]*img1.shape[0]/512), 1)
@@ -139,11 +140,12 @@ class DiskLightGlue:
 
 if __name__ == "__main__":
     # Example usage
+    image_size = 512
     img1 = cv2.imread("data/train_data/drone_images/1522.723948864.png")
-    img1 = cv2.resize(img1, (512, 512))
+    img1 = cv2.resize(img1, (image_size, image_size))
     img2 = cv2.imread("data/train_data/drone_images/1564.747154496.png")
-    img2 = cv2.resize(img2, (512, 512))
-    img2 = cv2.rotate(img2, cv2.ROTATE_180)
+    img2 = cv2.resize(img2, (image_size, image_size))
+    # img2 = cv2.rotate(img2, cv2.ROTATE_180)
 
     model = SuperPointLightGlue()
     # model = DiskLightGlue()
@@ -165,4 +167,44 @@ if __name__ == "__main__":
     plt.imshow(image)
     plt.show()
 
+    superpoint = SuperPointDescriptor()
+    lightglue = LightGlueMatcher("weight/lightglue/superpoint_lightglue.onnx")
+
+    kp1, desc1 = superpoint.compute(img1)
+    kp2, desc2 = superpoint.compute(img2)
+    matches = lightglue.match_descriptors(kp1, desc1, kp2, desc2)
+
+    print(f"LightGlue Matches found: {len(matches)}")
+
+    image = cv2.drawMatches(
+        img1, kp1,
+        img2, kp2,
+        matches,
+        None,
+        matchColor=(255, 0, 0),
+        flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+    )
+    plt.imshow(image)
+    plt.show()
+
+    
+    disk = DISKDescriptor()
+    lightglue = LightGlueMatcher("weight/lightglue/disk_lightglue.onnx")
+
+    kp1, desc1 = disk.compute(img1)
+    kp2, desc2 = disk.compute(img2)
+    matches = lightglue.match_descriptors(kp1, desc1, kp2, desc2)
+
+    print(f"LightGlue Matches found: {len(matches)}")
+
+    image = cv2.drawMatches(
+        img1, kp1,
+        img2, kp2,
+        matches,
+        None,
+        matchColor=(255, 0, 0),
+        flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+    )
+    plt.imshow(image)
+    plt.show()
     # model.compute_and_match(img1, img2)
