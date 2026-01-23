@@ -36,7 +36,7 @@ class SparseFeatureDescriptor:
         self,
         image: np.ndarray,
         mask: Optional[np.ndarray] = None
-    ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
+    ) -> Tuple[np.ndarray, List[cv2.KeyPoint], np.ndarray]:
         """
         Detect and compute sparse features.
 
@@ -45,7 +45,10 @@ class SparseFeatureDescriptor:
             mask: Optional mask.
 
         Returns:
-            Tuple of (keypoints list, descriptors array).
+            Tuple of (kp_norm, keypoints_cv2, descriptors).
+            - kp_norm: Normalized keypoint coordinates in [0,1] range (Nx2 array).
+            - keypoints_cv2: OpenCV KeyPoint objects with pixel coordinates.
+            - descriptors: Feature descriptors array.
         """
         if self.detector is None:
             raise NotImplementedError(
@@ -60,9 +63,18 @@ class SparseFeatureDescriptor:
         keypoints, descriptors = self.detector.detectAndCompute(gray, mask)
 
         if descriptors is None:
-            return [], np.empty((0, self.descriptor_dim), dtype=self.dtype)
+            empty_kp_norm = np.empty((0, 2), dtype=np.float32)
+            empty_desc = np.empty((0, self.descriptor_dim), dtype=self.dtype)
+            return empty_kp_norm, [], empty_desc
 
-        return self.sort_by_strength(keypoints, descriptors)
+        keypoints, descriptors = self.sort_by_strength(keypoints, descriptors)
+
+        # Extract pixel coordinates and normalize by image dimensions
+        h, w = gray.shape
+        kp_pixels = np.array([[kp.pt[0], kp.pt[1]] for kp in keypoints], dtype=np.float32)
+        kp_norm = kp_pixels / np.array([w, h], dtype=np.float32)
+
+        return kp_norm, keypoints, descriptors
 
     @staticmethod
     def sort_by_strength(
@@ -191,31 +203,37 @@ class SuperPointDescriptor(SparseFeatureDescriptor):
         self,
         image: np.ndarray,
         mask: Optional[np.ndarray] = None
-    ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
+    ) -> Tuple[np.ndarray, List[cv2.KeyPoint], np.ndarray]:
         """
         Detect and compute SuperPoint features.
         This method should be overridden to implement SuperPoint feature extraction.
         """
         # Implement SuperPoint feature extraction logic here
-        
+
         if image.ndim == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image
+
+        h, w = gray.shape
         gray = gray.astype(np.float32) / 255.0
         inp = gray[np.newaxis, np.newaxis, :, :]  # [1,1,H,W]
         # TODO remove hardcoded input name
         out = self.session.run(None, {"image": inp})
         score = out[1][0]
-        kp = out[0][0]
+        kp_pixels = out[0][0]  # Pixel coordinates from model
         desc = out[2][0]
-        
-        kps = [
+
+        # Create cv2.KeyPoint objects with pixel coordinates
+        kps_cv2 = [
             cv2.KeyPoint(float(p[0]), float(p[1]), int(s*50))
-            for p, s in zip(kp, score)
+            for p, s in zip(kp_pixels, score)
         ]
-        
-        return kps, desc.astype(np.float32)
+
+        # Normalize coordinates to [0,1] range
+        kp_norm = kp_pixels / np.array([w, h], dtype=np.float32)
+
+        return kp_norm.astype(np.float32), kps_cv2, desc.astype(np.float32)
     
 
 class DISKDescriptor(SparseFeatureDescriptor):
@@ -235,13 +253,14 @@ class DISKDescriptor(SparseFeatureDescriptor):
         self,
         image: np.ndarray,
         mask: Optional[np.ndarray] = None
-    ) -> Tuple[List[cv2.KeyPoint], np.ndarray]:
+    ) -> Tuple[np.ndarray, List[cv2.KeyPoint], np.ndarray]:
         """
         Detect and compute DISK features.
         This method should be overridden to implement DISK feature extraction.
         """
         # Implement DISK feature extraction logic here
         # It takes 13HW input
+        h, w = image.shape[:2]
         input = image.astype(np.float32) / 255.0
         input = input.transpose(2, 0, 1)  # HWC to CHW
         input = input[np.newaxis, :, :, :]  # 1CHW
@@ -249,26 +268,78 @@ class DISKDescriptor(SparseFeatureDescriptor):
         # TODO remove hardcoded input name
         out = self.session.run(None, {"image": input})
         score = out[1][0]
-        kp = out[0][0]
+        kp_pixels = out[0][0]  # Pixel coordinates from model
         desc = out[2][0]
-        
-        kps = [
-            cv2.KeyPoint(float(p[0]), float(p[1]), int(s*50))
-            for p, s in zip(kp, score)
+
+        # Create cv2.KeyPoint objects with pixel coordinates
+        kps_cv2 = [
+            cv2.KeyPoint(float(p[0]), float(p[1]), int(s))
+            for p, s in zip(kp_pixels, score)
         ]
-        
-        return kps, desc.astype(np.float32)
+
+        # Normalize coordinates to [0,1] range
+        kp_norm = kp_pixels / np.array([w, h], dtype=np.float32)
+
+        return kp_norm.astype(np.float32), kps_cv2, desc.astype(np.float32)
+    
+
+def plot_keypoints(
+    image: np.ndarray,
+    kp_cv2: List[cv2.KeyPoint],
+    title: str
+) -> np.ndarray:
+    """Plot keypoints on image using OpenCV drawing."""
+    img_kp = cv2.drawKeypoints(
+        image,
+        kp_cv2,
+        None,
+        flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
+    )
+    return img_kp
+    
     
 
 if __name__ == "__main__":
-    # Example usage
-    # superpoint = SuperPointDescriptor(model_path="weight/superpoint_v6_from_tf.pth")
-    superpoint = SuperPointDescriptor(model_path="weight/superpoint_512.onnx")
-    image = np.zeros((480, 640), dtype=np.uint8)
-    out = superpoint.compute(image)
-    print(out)
+    import matplotlib.pyplot as plt
+    fig = plt.figure(figsize=(12, 8))
 
-    superpoint = DISKDescriptor(model_path="weight/disk.onnx")
-    image = np.zeros((480, 640, 3), dtype=np.uint8)
-    out = superpoint.compute(image)
-    print(out)
+    img = cv2.imread("data/train_data/drone_images/1522.723948864.png")
+    
+    sift = SIFTDescriptor(nfeatures=500)
+    kp_norm, kp_cv2, desc = sift.compute(img)
+    print(f"SIFT: {len(kp_cv2)} keypoints, descriptor shape:{desc.shape}")
+    ax1 = fig.add_subplot(2, 2, 1)
+    ax1.imshow(cv2.cvtColor(plot_keypoints(img, kp_cv2, "SIFT Keypoints"), cv2.COLOR_BGR2RGB))
+    ax1.axis("off")
+
+    # TODO: This is not supported on my machine
+    # surf = SURFDescriptor(hessian_threshold=400.0)
+    # kp_norm, kp_cv2, desc = surf.compute(img)
+    # print(f"SURF: {len(kp_cv2)} keypoints, descriptor shape:{desc.shape}")
+    # ax2 = fig.add_subplot(3, 2, 2)
+    # ax2.imshow(cv2.cvtColor(plot_keypoints(img, kp_cv2, "SURF Keypoints"), cv2.COLOR_BGR2RGB))
+    # ax2.axis("off")
+
+    orb = ORBDescriptor(nfeatures=500)
+    kp_norm, kp_cv2, desc = orb.compute(img)
+    print(f"ORB: {len(kp_cv2)} keypoints, descriptor shape:{desc.shape}")
+    ax3 = fig.add_subplot(2, 2, 2)
+    ax3.imshow(cv2.cvtColor(plot_keypoints(img, kp_cv2, "ORB Keypoints"), cv2.COLOR_BGR2RGB))
+    ax3.axis("off")   
+
+    superpoint = SuperPointDescriptor(model_path="weight/superpoint_512.onnx")
+    kp_norm, kp_cv2, desc = superpoint.compute(img)
+    print(f"SuperPoint: {len(kp_cv2)} keypoints, descriptor shape:{desc.shape}")
+    ax4 = fig.add_subplot(2, 2, 3)
+    ax4.imshow(cv2.cvtColor(plot_keypoints(img, kp_cv2, "SuperPoint Keypoints"), cv2.COLOR_BGR2RGB))
+    ax4.axis("off")
+
+    disk = DISKDescriptor(model_path="weight/disk.onnx")
+    kp_norm, kp_cv2, desc = disk.compute(img)
+    print(f"DISK: {len(kp_cv2)} keypoints, descriptor shape:{desc.shape}")
+    ax5 = fig.add_subplot(2, 2, 4)
+    ax5.imshow(cv2.cvtColor(plot_keypoints(img, kp_cv2, "DISK Keypoints"), cv2.COLOR_BGR2RGB))
+    ax5.axis("off")
+
+    plt.tight_layout()
+    plt.show()
