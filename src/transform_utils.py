@@ -2,7 +2,7 @@
 
 import cv2
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 
 def decompose_similarity(M: np.ndarray) -> dict:
@@ -37,6 +37,7 @@ def compose_similarity(
     image_height: float
 ) -> np.ndarray:
     """
+    # TODO: deprecate this function
     Construct a 2D similarity transform matrix that rotates around image center.
 
     Args:
@@ -73,6 +74,7 @@ def transform_points(
     M: np.ndarray
 ) -> List[cv2.KeyPoint]:
     """
+    # TODO: deprecate this function
     Apply 2D transform to cv2.KeyPoint list.
 
     Args:
@@ -122,11 +124,98 @@ def compose_transforms(M1: np.ndarray, M2: np.ndarray) -> np.ndarray:
     return (M2_h @ M1_h)[:2, :]
 
 
-def to_homogeneous(M: np.ndarray) -> np.ndarray:
-    """Convert 2x3 affine to 3x3 homogeneous matrix."""
-    return np.vstack([M, [0, 0, 1]])
+def homography_estimate(
+    src_pts: np.ndarray,
+    dst_pts: np.ndarray,
+    ransac_thresh: float = 0.025,
+    confidence: float = 0.95,
+    max_iters: int = 2000,
+    refine_iters: int = 10,
+    type: str = "similarity"
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """
+    Estimate 2D transform using RANSAC.
+
+    Args:
+        src_pts: Source points (Nx2) Normalized.
+        dst_pts: Destination points (Nx2) Normalized.
+        ransac_thresh: RANSAC reprojection threshold in pixels.
+        confidence: RANSAC confidence level.
+        max_iters: Maximum RANSAC iterations.
+        refine_iters: Number of refinement iterations after RANSAC.
+        type: Type of model to estimate ("homography", "affine", "similarity").
+
+    Returns:
+        Tuple of (transform matrix, inlier mask).
+    """
+    if type == "homography":
+        M, mask = cv2.findHomography(
+            src_pts, dst_pts,
+            cv2.RANSAC,
+            ransacReprojThreshold=ransac_thresh,
+            maxIters=max_iters,
+            confidence=confidence,
+            refineIters=refine_iters
+        )
+    elif type == "affine":
+        M, mask = cv2.estimateAffine2D(
+            src_pts, dst_pts,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=ransac_thresh,
+            maxIters=max_iters,
+            confidence=confidence,
+            refineIters=refine_iters,
+            refineIters=refine_iters
+        )
+    elif type == "similarity":
+        M, mask = cv2.estimateAffinePartial2D(
+            src_pts, dst_pts,
+            method=cv2.RANSAC,
+            ransacReprojThreshold=ransac_thresh,
+            maxIters=max_iters,
+            confidence=confidence,
+            refineIters=refine_iters,
+            refineIters=refine_iters
+        )
+    else:
+        raise ValueError(f"Unknown model type: {type}")
+
+    return M, mask
 
 
-def from_homogeneous(M: np.ndarray) -> np.ndarray:
-    """Convert 3x3 homogeneous to 2x3 affine matrix."""
-    return M[:2, :]
+def renormalize_transform(
+    M: np.ndarray,
+    query_size: Tuple[int, int],
+    map_size: Tuple[int, int]
+) -> np.ndarray:
+    """
+    Renormalize transform matrix from normalized coords to pixel coords.
+
+    Args:
+        M: 2x3 transform matrix in normalized coords.
+        query_size: (width, height) of source image in pixels.
+        map_size: (width, height) of destination image in pixels.
+    Returns:
+        2x3 transform matrix in pixel coords.
+    """
+    qw, qh = query_size
+    mw, mh = map_size
+
+    # TODO: verify correctness
+    S_query = np.array([
+        [1.0/qw, 0, 0],
+        [0, 1.0/qh, 0],
+        [0, 0, 1]
+    ], dtype=np.float32)
+
+    S_map_inv = np.array([
+        [mw, 0, 0],
+        [0, mh, 0],
+        [0, 0, 1]
+    ], dtype=np.float32)
+
+    M_h = np.vstack([M, [0, 0, 1]])
+    M_renorm = S_map_inv @ M_h @ S_query
+
+    return M_renorm[:2, :]
+
