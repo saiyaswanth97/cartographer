@@ -120,6 +120,8 @@ class LightGlueMatcher(BaseMatcher):
                 j = matches0[i]
                 matches_scores.append( (i, j, scores0[i]) )
 
+        matches_scores.sort(key=lambda x: x[2], reverse=True)
+
         matches_cv2 = [
             cv2.DMatch(
                 _queryIdx=int(i1),
@@ -191,6 +193,7 @@ class OpenCVMatcher(BaseMatcher):
             m, n = match
             if m.distance < self.ratio_thresh * n.distance:
                 good.append(m)
+        good = sorted(good, key=lambda x: x.distance)
 
         return good
 
@@ -211,6 +214,7 @@ class OpenCVMatcher(BaseMatcher):
         matches_12 = bf.match(desc1, desc2)
         matches_21 = bf.match(desc2, desc1)
 
+
         # Build reverse lookup
         reverse = {m.trainIdx: m.queryIdx for m in matches_21}
 
@@ -218,6 +222,7 @@ class OpenCVMatcher(BaseMatcher):
         for m in matches_12:
             if reverse.get(m.queryIdx, -1) == m.trainIdx:
                 mutual.append(m)
+        mutual.sort(key=lambda x: x.distance)
 
         return mutual
     
@@ -290,7 +295,7 @@ if __name__ == "__main__":
     ax1 = fig.add_subplot(2, 1, 1)
     ax1.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     ax1.axis("off")
-    ax1.set_title("OpenCV MNN Matches with SuperPoint Features")
+    ax1.set_title("OpenCV MNN Matches with SIFT Features")
 
     matcher = OpenCVMatcher(matcher="flann", ratio_thresh=0.85)
     matches = matcher.match_descriptors(kp1_norm, desc1, kp2_norm, desc2)
@@ -300,7 +305,7 @@ if __name__ == "__main__":
     ax2 = fig.add_subplot(2, 1, 2)
     ax2.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     ax2.axis("off")
-    ax2.set_title("OpenCV FLANN Matches with SuperPoint Features")
+    ax2.set_title("OpenCV FLANN Matches with SIFT Features")
 
     plt.tight_layout()
     plt.show()
