@@ -9,16 +9,17 @@ Uses feature matching to locate drone images on satellite maps.
 import argparse
 import logging
 from dataclasses import dataclass
-from typing import Optional, Tuple, Callable
+from typing import Optional, Tuple, Callable, List
 
+import cv2
 import numpy as np
 
 from src.config import load_config, Config
 from src.map_query import MapQuery
 from src.drone_image import DroneImage
-from src.feature_extraction import SuperPointDescriptor, DISKDescriptor
-from src.dl_e2e_matching import SuperPointLightGlue, DiskLightGlue
-from src.matching import SIFTMatcher2D
+from src.feature_extraction import SuperPointDescriptor, DISKDescriptor, SIFTDescriptor, ORBDescriptor
+from src.feature_matching import LightGlueMatcher, OpenCVMatcher
+from src.transform_utils import homography_estimate, renormalize_transform, transform_points, decompose_similarity
 from src.visualization import visualize_matching_results
 
 
@@ -109,6 +110,154 @@ def refine_transform_for_visualization(
     return kp1_viz, transform_viz
 
 
+class EstimatePose:
+    """Pose estimation using feature matching and RANSAC."""
+
+    def __init__(self, config: Config):
+        
+        if config.pipeline.feature_extractor == "disk":
+            self.feature_extractor = DISKDescriptor()
+        elif config.pipeline.feature_extractor == "superpoint":
+            self.feature_extractor = SuperPointDescriptor()
+        elif config.pipeline.feature_extractor == "sift":
+            self.feature_extractor = SIFTDescriptor()
+        elif config.pipeline.feature_extractor == "orb":
+            self.feature_extractor = ORBDescriptor()
+        else:
+            raise ValueError(f"Unknown feature extractor: {config.pipeline.feature_extractor}")
+        
+        if config.pipeline.feature_matcher == "lightglue":
+            if config.pipeline.feature_extractor == "disk":
+                self.matcher = LightGlueMatcher(config.weights.disk_lightglue)
+            elif config.pipeline.feature_extractor == "superpoint":
+                self.matcher = LightGlueMatcher(config.weights.superpoint_lightglue)
+            else:
+                raise ValueError(f"LightGlue matcher not supported for extractor: {config.pipeline.feature_extractor}")
+        elif config.pipeline.feature_matcher == "opencv":
+            self.matcher = OpenCVMatcher(config.pipeline.matcher, ratio_thresh=config.pipeline.ratio_thresh)
+        else:
+            raise ValueError(f"Unknown feature matcher: {config.pipeline.feature_matcher}")
+        
+        self.image_size = config.pipeline.image_size
+        self.ransac_thresh = config.matching.ransac_thresh
+        self.confidence = config.matching.confidence
+        self.refine_iters = config.matching.refine_iters
+        
+    def estimate(
+        self,
+        img1: np.ndarray,
+        img2: np.ndarray
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[Tuple[np.ndarray, np.ndarray]]]:
+        """
+        Estimate pose between two images.
+        Args:
+            img1: First image (drone image).
+            img2: Second image (map image).
+        Returns:
+            Tuple of (transform matrix, inlier mask, matches, (keypoints1, keypoints2))
+        """
+        input1 = cv2.resize(img1, (self.image_size, self.image_size))
+        input2 = cv2.resize(img2, (self.image_size, self.image_size))
+
+        kp1_norm, kp1, desc1 = self.feature_extractor.compute(input1)
+        kp2_norm, kp2, desc2 = self.feature_extractor.compute(input2)
+
+        matches = self.matcher.match_descriptors(kp1_norm, desc1, kp2_norm, desc2)
+
+        if len(matches) < 4:
+            logger.warning("Not enough matches to estimate pose")
+            return None, None, matches, (kp1, kp2)
+
+        M, mask = homography_estimate(
+            kp1_norm, kp2_norm,
+            matches,
+            ransac_thresh=self.ransac_thresh,
+            confidence=self.confidence,
+            max_iters=2000,
+            refine_iters=self.refine_iters,
+            type="similarity"
+        )
+
+        if M is None:
+            logger.warning("Pose estimation failed, not enough inliers")
+            return None, None, matches, (kp1, kp2)
+        else:
+            logger.info(f"Total matches: {len(matches)} / {len(kp1)} keypoints in img1, {len(kp2)} keypoints in img2")
+            logger.info(f"Pose Estimation successful: {np.sum(mask)} inliers out of {len(matches)} matches")
+            # TODO: combine mask with matches to return only inlier matches
+            # for i in range(len(matches)):
+            #     if mask[i] == 0:
+            #         matches[i] = None
+            # matches = [m for m in matches if m is not None]
+
+        M = renormalize_transform(
+            M,
+            (img1.shape[1], img1.shape[0]),
+            (img2.shape[1], img2.shape[0])
+        )
+
+        return M, mask, matches, (kp1, kp2)
+    
+
+def estimate_pose(config: Config, drone_img: np.ndarray, map_img: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], Optional[Tuple[np.ndarray, np.ndarray]]]:
+    """
+    Search for best matching angle using pose estimation.
+    Args:
+        config: Configuration object.
+        drone_img: Drone image.
+        map_img: Map image.
+    Returns:
+        Tuple of (transform matrix, inlier mask, matches, (keypoints1, keypoints2))
+        """
+    pose_estimator = EstimatePose(config)
+
+    if not config.angle_search.enabled:
+        # Single angle from preprocessing config
+        drone_img_iter, _ = DroneImage.preprocess(
+            drone_img,
+            scale=config.preprocessing.scale,
+            rotation=config.preprocessing.rotation
+        )
+        return pose_estimator.estimate(drone_img_iter, map_img)
+
+    for angle in range(*config.angle_search.range):
+        logger.debug(f"Trying angle: {angle} degrees")
+
+        drone_img_iter, _ = DroneImage.preprocess(
+            drone_img,
+            scale=config.preprocessing.scale,
+            rotation=angle
+        )
+
+        M, mask, matches, (kp1, kp2) = pose_estimator.estimate(drone_img_iter, map_img)
+        if mask is not None and np.sum(mask) >= 60:
+            logger.info(f"Angle search successful at angle {angle} degrees with {np.sum(mask)} inliers.")
+        else:
+            M = None
+
+        if M is not None:
+            if config.angle_search.refine:
+                params = decompose_similarity(M)
+                scale_ = params['scale']
+                angle_ = params['rotation'] + angle
+                print(f"Refined angle: {angle_} degrees, scale: {scale_}")
+
+                drone_img_final, drone_transform = DroneImage.preprocess(
+                    drone_img,
+                    scale=scale_,
+                    rotation=angle_
+                )
+                M, mask, matches, (kp1, kp2) = pose_estimator.estimate(drone_img_final, map_img)
+
+                drone_transform = np.vstack([drone_transform, [0, 0, 1]])
+                M = M @ drone_transform
+                kp1 = transform_points(kp1, np.linalg.inv(drone_transform))  # Transform keypoints back to raw image coords
+
+            return M, mask, matches, (kp1, kp2)
+
+    return None, None, None, None
+
+
 def build_output(result, ctx: MatchingContext, params: dict) -> dict:
     """Build output dictionary from matching result."""
     if result is None or not result.success:
@@ -122,11 +271,6 @@ def build_output(result, ctx: MatchingContext, params: dict) -> dict:
     pixel_loc, lat_lon = compute_location(
         result.transform, ctx.drone_img_raw, ctx.window, ctx.map_query
     )
-
-    logger.info("Matching succeeded!")
-    logger.info(f"  - Matches: {result.num_matches}")
-    logger.info(f"  - Inliers after RANSAC: {result.num_inliers}")
-    logger.info(f"  - Inlier ratio: {result.inlier_ratio:.1%}")
 
     if params.get('scale'):
         logger.info(f"Transform: scale={params['scale']:.3f}, "
@@ -144,268 +288,6 @@ def build_output(result, ctx: MatchingContext, params: dict) -> dict:
         'transform': result.transform,
         'transform_params': params
     }
-
-
-def run_visualization(
-    config: Config,
-    drone_img: np.ndarray,
-    map_img: np.ndarray,
-    kp1: np.ndarray,
-    kp2: np.ndarray,
-    result
-):
-    """Run visualization if enabled in config."""
-    if not (config.visualization.enabled or config.visualization.save_results):
-        return
-
-    save_path = config.visualization.output_file if config.visualization.save_results else None
-    visualize_matching_results(
-        drone_img, map_img,
-        kp1, kp2,
-        result.inliers, result.all_matches,
-        result.transform,
-        save_path=save_path,
-        show=config.visualization.enabled,
-        max_keypoints=config.visualization.max_keypoints_draw,
-        max_matches=config.visualization.max_matches_draw
-    )
-    if save_path:
-        logger.info(f"Saved visualization to {save_path}")
-
-
-def get_feature_extractor(config: Config):
-    """Get feature extractor based on config."""
-    if config.pipeline.feature_extractor == "disk":
-        return DISKDescriptor()
-    return SuperPointDescriptor()
-
-
-def get_e2e_matcher(config: Config):
-    """Get end-to-end matcher based on config."""
-    if config.pipeline.feature_extractor == "disk":
-        return DiskLightGlue()
-    return SuperPointLightGlue()
-
-
-def search_best_angle_descriptor(
-    ctx: MatchingContext,
-    feature_extractor,
-    matcher: SIFTMatcher2D,
-    kp2: np.ndarray,
-    desc2: np.ndarray
-) -> Tuple[object, np.ndarray, np.ndarray]:
-    """Search for best matching angle using descriptor-based matching."""
-    config = ctx.config
-    result = None
-    kp1 = None
-
-    if not config.angle_search.enabled:
-        # Single angle from preprocessing config
-        drone_img_iter, T_pre = DroneImage.preprocess(
-            ctx.drone_img_raw,
-            scale=config.preprocessing.scale,
-            rotation=config.preprocessing.rotation
-        )
-        kp1, desc1 = feature_extractor.compute(drone_img_iter)
-        result = matcher.match_and_estimate(kp1, desc1, kp2, desc2)
-
-        if result.success:
-            kp1, result.transform = refine_transform_for_visualization(
-                kp1, T_pre, result.transform, matcher.transform_points
-            )
-        return result, kp1, kp2
-
-    for angle in range(*config.angle_search.range):
-        drone_img_iter, _ = DroneImage.preprocess(
-            ctx.drone_img_raw,
-            scale=config.preprocessing.scale,
-            rotation=angle
-        )
-
-        kp1_iter, desc1 = feature_extractor.compute(drone_img_iter)
-        result = matcher.match_and_estimate(kp1_iter, desc1, kp2, desc2)
-
-        if result.success:
-            if config.angle_search.refine:
-                params = matcher.decompose_similarity(result.transform)
-                scale_ = params['scale']
-                angle_ = params['rotation'] + angle
-
-                drone_img_final, T_pre = DroneImage.preprocess(
-                    ctx.drone_img_raw,
-                    scale=scale_,
-                    rotation=angle_
-                )
-                kp1_refined, desc1 = feature_extractor.compute(drone_img_final)
-                result = matcher.match_and_estimate(kp1_refined, desc1, kp2, desc2)
-
-                kp1, result.transform = refine_transform_for_visualization(
-                    kp1_refined, T_pre, result.transform, matcher.transform_points
-                )
-            else:
-                kp1 = kp1_iter
-            break
-
-    return result, kp1, kp2
-
-
-def search_best_angle_e2e(
-    ctx: MatchingContext,
-    matcher,
-    pose_estimator: SIFTMatcher2D
-) -> Tuple[object, np.ndarray, np.ndarray]:
-    """Search for best matching angle using end-to-end matching."""
-    config = ctx.config
-    result = None
-    kp1 = None
-    kp2 = None
-
-    if not config.angle_search.enabled:
-        # Single angle from preprocessing config
-        drone_img_iter, T_pre = DroneImage.preprocess(
-            ctx.drone_img_raw,
-            scale=config.preprocessing.scale,
-            rotation=config.preprocessing.rotation
-        )
-        kp1, kp2, matches, scores = matcher.compute_and_match(drone_img_iter, ctx.map_img)
-
-        if len(matches) >= config.matching.min_inliers:
-            result = pose_estimator.match_and_estimate(kp1, None, kp2, None, matches=matches)
-            if result.success:
-                kp1, result.transform = refine_transform_for_visualization(
-                    kp1, T_pre, result.transform, pose_estimator.transform_points
-                )
-        return result, kp1, kp2
-
-    for angle in range(*config.angle_search.range):
-        logger.debug(f"Trying angle: {angle} degrees")
-
-        drone_img_iter, _ = DroneImage.preprocess(
-            ctx.drone_img_raw,
-            scale=config.preprocessing.scale,
-            rotation=angle
-        )
-
-        kp1_iter, kp2, matches, scores = matcher.compute_and_match(drone_img_iter, ctx.map_img)
-        if len(matches) < config.matching.min_inliers:
-            continue
-
-        result = pose_estimator.match_and_estimate(kp1_iter, None, kp2, None, matches=matches)
-
-        if result.success:
-            if config.angle_search.refine:
-                params = pose_estimator.decompose_similarity(result.transform)
-                scale_ = params['scale']
-                angle_ = params['rotation'] + angle
-
-                drone_img_final, T_pre = DroneImage.preprocess(
-                    ctx.drone_img_raw,
-                    scale=scale_,
-                    rotation=angle_
-                )
-                kp1_refined, kp2, matches, scores = matcher.compute_and_match(
-                    drone_img_final, ctx.map_img
-                )
-                if len(matches) < config.matching.min_inliers:
-                    continue
-
-                result = pose_estimator.match_and_estimate(
-                    kp1_refined, None, kp2, None, matches=matches
-                )
-                kp1, result.transform = refine_transform_for_visualization(
-                    kp1_refined, T_pre, result.transform, pose_estimator.transform_points
-                )
-            else:
-                kp1 = kp1_iter
-            break
-
-    return result, kp1, kp2
-
-
-def run_matching_pipeline(config: Config) -> dict:
-    """Run the descriptor-based matching pipeline."""
-    global logger
-    logger = setup_logging(config)
-
-    # Load data
-    map_query, map_img, window = load_map_patch(config)
-    drone_img_raw = load_drone_image(config)
-
-    ctx = MatchingContext(
-        map_query=map_query,
-        map_img=map_img,
-        window=window,
-        drone_img_raw=drone_img_raw,
-        config=config
-    )
-
-    # Setup feature extraction and matching
-    feature_extractor = get_feature_extractor(config)
-    kp2, desc2 = feature_extractor.compute(map_img)
-
-    matcher = SIFTMatcher2D(
-        model=config.matching.model,
-        ratio_thresh=config.matching.ratio_thresh,
-        ransac_thresh=config.matching.ransac_thresh,
-        confidence=config.matching.confidence,
-        min_inliers=config.matching.min_inliers
-    )
-
-    # Search for best angle
-    result, kp1, kp2 = search_best_angle_descriptor(
-        ctx, feature_extractor, matcher, kp2, desc2
-    )
-
-    # Build output
-    params = matcher.decompose_similarity(result.transform) if result and result.success else {}
-    output = build_output(result, ctx, params)
-
-    # Visualization
-    if result and kp1 is not None:
-        run_visualization(config, drone_img_raw, map_img, kp1, kp2, result)
-
-    return output
-
-
-def run_matching_e2e_pipeline(config: Config) -> dict:
-    """Run the end-to-end matching pipeline (SuperPoint/DISK + LightGlue)."""
-    global logger
-    logger = setup_logging(config)
-
-    # Load data
-    map_query, map_img, window = load_map_patch(config)
-    drone_img_raw = load_drone_image(config)
-
-    ctx = MatchingContext(
-        map_query=map_query,
-        map_img=map_img,
-        window=window,
-        drone_img_raw=drone_img_raw,
-        config=config
-    )
-
-    # Setup matchers
-    matcher = get_e2e_matcher(config)
-    pose_estimator = SIFTMatcher2D(
-        model=config.matching.model,
-        ratio_thresh=config.matching.ratio_thresh,
-        ransac_thresh=config.matching.ransac_thresh,
-        confidence=config.matching.confidence,
-        min_inliers=config.matching.min_inliers
-    )
-
-    # Search for best angle
-    result, kp1, kp2 = search_best_angle_e2e(ctx, matcher, pose_estimator)
-
-    # Build output
-    params = pose_estimator.decompose_similarity(result.transform) if result and result.success else {}
-    output = build_output(result, ctx, params)
-
-    # Visualization
-    if result and kp1 is not None:
-        run_visualization(config, drone_img_raw, map_img, kp1, kp2, result)
-
-    return output
 
 
 def parse_args() -> argparse.Namespace:
@@ -428,20 +310,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def print_summary(result: dict):
-    """Print matching result summary."""
-    print("=" * 60)
-    if result['success']:
-        print("MATCHING SUCCESSFUL")
-        print(f"  Location: {result['lat_lon'][0]:.6f}, {result['lat_lon'][1]:.6f}")
-        print(f"  Inliers: {result['num_inliers']} ({result['inlier_ratio']:.1%})")
-    else:
-        print("MATCHING FAILED")
-        print(f"  Matches: {result.get('num_matches', 0)}")
-        print(f"  Inliers: {result.get('num_inliers', 0)}")
-    print("=" * 60)
-
-
 def main() -> int:
     """Main entry point."""
     args = parse_args()
@@ -455,15 +323,26 @@ def main() -> int:
     if args.no_save:
         config.visualization.save_results = False
 
-    # Select pipeline based on config
-    if config.pipeline.type == "e2e":
-        result = run_matching_e2e_pipeline(config)
+    drone_image = load_drone_image(config)
+    map_query, map_image, window = load_map_patch(config)
+
+    M, mask, matches, (kp1, kp2) = estimate_pose(config, drone_image, map_image)
+    if M is None:
+        logger.error("Pose estimation failed.")
+        return 1
     else:
-        result = run_matching_pipeline(config)
-
-    print_summary(result)
-
-    return 0 if result['success'] else 1
+        logger.info("Pose estimation succeeded.")
+        visualize_matching_results(
+            drone_image,
+            map_image,
+            kp1,
+            kp2,
+            [m for i, m in enumerate(matches) if mask[i]],
+            matches,
+            M,
+            save_path=config.paths.output_file if config.visualization.save_results else None,
+            show=config.visualization.enabled
+        )
 
 
 if __name__ == '__main__':
