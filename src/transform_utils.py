@@ -127,6 +127,7 @@ def compose_transforms(M1: np.ndarray, M2: np.ndarray) -> np.ndarray:
 def homography_estimate(
     src_pts: np.ndarray,
     dst_pts: np.ndarray,
+    matches: List[cv2.DMatch],
     ransac_thresh: float = 0.025,
     confidence: float = 0.95,
     max_iters: int = 2000,
@@ -139,6 +140,7 @@ def homography_estimate(
     Args:
         src_pts: Source points (Nx2) Normalized.
         dst_pts: Destination points (Nx2) Normalized.
+        matches: List of cv2.DMatch objects.
         ransac_thresh: RANSAC reprojection threshold in pixels.
         confidence: RANSAC confidence level.
         max_iters: Maximum RANSAC iterations.
@@ -148,9 +150,11 @@ def homography_estimate(
     Returns:
         Tuple of (transform matrix, inlier mask).
     """
+    kp1 = src_pts[[m.queryIdx for m in matches]]
+    kp2 = dst_pts[[m.trainIdx for m in matches]]
     if type == "homography":
         M, mask = cv2.findHomography(
-            src_pts, dst_pts,
+            kp1, kp2,
             cv2.RANSAC,
             ransacReprojThreshold=ransac_thresh,
             maxIters=max_iters,
@@ -159,22 +163,20 @@ def homography_estimate(
         )
     elif type == "affine":
         M, mask = cv2.estimateAffine2D(
-            src_pts, dst_pts,
+            kp1, kp2,
             method=cv2.RANSAC,
             ransacReprojThreshold=ransac_thresh,
             maxIters=max_iters,
             confidence=confidence,
-            refineIters=refine_iters,
             refineIters=refine_iters
         )
     elif type == "similarity":
         M, mask = cv2.estimateAffinePartial2D(
-            src_pts, dst_pts,
+            kp1, kp2,
             method=cv2.RANSAC,
             ransacReprojThreshold=ransac_thresh,
             maxIters=max_iters,
             confidence=confidence,
-            refineIters=refine_iters,
             refineIters=refine_iters
         )
     else:

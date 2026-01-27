@@ -133,7 +133,7 @@ class MapQuery:
         x: int,
         y: int,
         patch_size: int,
-        scale: float = 1.5,
+        scale: float = 1.0,
         allow_clip: bool = True
     ) -> Tuple[np.ndarray, rasterio.windows.Window]:
         """

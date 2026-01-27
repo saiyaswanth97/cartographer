@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 from pathlib import Path
 
 from .feature_extraction import SIFTDescriptor
-from .matching import SIFTMatcher2D
+from .transform_utils import decompose_similarity
 
 
 def visualize_matching_results(
@@ -120,7 +120,7 @@ def visualize_matching_results(
     """
 
     if transform_matrix is not None and transform_matrix.shape[0] == 2:
-        params = SIFTMatcher2D.decompose_similarity(transform_matrix)
+        params = decompose_similarity(transform_matrix)
         if params['scale'] is not None:
             stats_text += f"""
     Transform Parameters
